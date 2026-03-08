@@ -26,6 +26,10 @@ td codex
 # Open a git worktree branch
 td -w feature-branch
 td --worktree feature-branch codex
+
+# Clone repo to a sibling directory and open
+td -c my-clone
+td --clone my-clone kimi
 ```
 
 Each project gets its own Hyprland workspace named `td-<project>`. Running `td` again in the same directory switches to the existing workspace instead of creating a new one.

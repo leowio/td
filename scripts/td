@@ -4,6 +4,8 @@
 #   td [ai_args...]                    - Open current directory
 #   td --worktree <branch> [ai_args]   - Open git worktree for branch
 #   td -w <branch> [ai_args]           - Short form for --worktree
+#   td --clone <name> [ai_args]        - Clone repo to ../<name> and open
+#   td -c <name> [ai_args]             - Short form for --clone
 
 set -e
 
@@ -56,12 +58,51 @@ tdg_open() {
     td_open "$worktree_dir" "$@"
 }
 
+# Clone workflow: full copy of repo + checkout/create branch
+clone_open() {
+    local name="$1"
+    shift
+
+    local repo_root
+    repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+        echo "Not in a git repository."
+        return 1
+    }
+
+    local clone_dir="$repo_root/../$name"
+
+    if [[ -d "$clone_dir" ]]; then
+        echo "Clone already exists at $clone_dir, using it."
+    else
+        local remote
+        remote=$(git remote get-url origin 2>/dev/null) || {
+            echo "No origin remote found."
+            return 1
+        }
+
+        git clone "$remote" "$clone_dir"
+
+        cd "$clone_dir"
+        if git show-ref --verify --quiet "refs/heads/$name"; then
+            git checkout "$name"
+        elif git show-ref --verify --quiet "refs/remotes/origin/$name"; then
+            git checkout "$name"
+        else
+            echo "Branch '$name' not found locally or on origin. Creating new branch."
+            git checkout -b "$name"
+        fi
+    fi
+
+    td_open "$clone_dir" "$@"
+}
+
 # Print usage
 usage() {
     echo "Usage: td [options] [ai_args...]"
     echo ""
     echo "Options:"
     echo "  -w, --worktree <branch>   Open git worktree for branch"
+    echo "  -c, --clone <name>        Clone repo to ../<name> and open"
     echo "  -h, --help                Show this help message"
     echo ""
     echo "Examples:"
@@ -69,6 +110,8 @@ usage() {
     echo "  td kimi                   Open current directory with 'kimi' as AI command"
     echo "  td -w feature-branch      Open worktree for feature-branch"
     echo "  td --worktree foo codex   Open worktree for 'foo' with 'codex' as AI"
+    echo "  td -c my-clone            Clone repo to ../my-clone and open"
+    echo "  td --clone my-clone kimi  Clone repo and open with 'kimi' as AI"
 }
 
 # Main entry point
@@ -85,6 +128,17 @@ main() {
                 local branch="$1"
                 shift
                 tdg_open "$branch" "$@"
+                return
+                ;;
+            -c|--clone)
+                shift
+                if [[ $# -eq 0 ]]; then
+                    echo "Error: --clone requires a name"
+                    exit 1
+                fi
+                local name="$1"
+                shift
+                clone_open "$name" "$@"
                 return
                 ;;
             -h|--help)

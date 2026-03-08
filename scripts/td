@@ -1,0 +1,113 @@
+#!/bin/bash
+# td - Unified tmux dev session launcher
+# Usage:
+#   td [ai_args...]                    - Open current directory
+#   td --worktree <branch> [ai_args]   - Open git worktree for branch
+#   td -w <branch> [ai_args]           - Short form for --worktree
+
+set -e
+
+# Get current dir name, sanitized for workspace naming
+get_project_name() {
+    local dir="$1"
+    basename "$dir" | tr '.:/ ' '----'
+}
+
+# Main td workflow: open directory with optional AI command
+td_open() {
+    local dir="$1"
+    shift
+    local ai_cmd="$*"
+    
+    [[ -z "$ai_cmd" ]] && ai_cmd="claude --dangerously-skip-permissions"
+    
+    local project
+    project=$(get_project_name "$dir")
+    
+    hyprctl dispatch exec "td-layout 'td-$project' '$dir' '$ai_cmd'"
+}
+
+# tdg workflow: git worktree + td
+tdg_open() {
+    local branch="$1"
+    shift
+    
+    local repo_root
+    repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+        echo "Not in a git repository."
+        return 1
+    }
+    
+    local worktree_dir="$repo_root/../$branch"
+    
+    if [[ -d "$worktree_dir" ]]; then
+        echo "Worktree already exists at $worktree_dir, using it."
+    else
+        if git show-ref --verify --quiet "refs/heads/$branch"; then
+            git worktree add "$worktree_dir" "$branch"
+        elif git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+            git worktree add "$worktree_dir" "$branch"
+        else
+            echo "Branch '$branch' not found locally or on origin. Creating new branch."
+            git worktree add -b "$branch" "$worktree_dir"
+        fi
+    fi
+    
+    td_open "$worktree_dir" "$@"
+}
+
+# Print usage
+usage() {
+    echo "Usage: td [options] [ai_args...]"
+    echo ""
+    echo "Options:"
+    echo "  -w, --worktree <branch>   Open git worktree for branch"
+    echo "  -h, --help                Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  td                        Open current directory"
+    echo "  td kimi                   Open current directory with 'kimi' as AI command"
+    echo "  td -w feature-branch      Open worktree for feature-branch"
+    echo "  td --worktree foo codex   Open worktree for 'foo' with 'codex' as AI"
+}
+
+# Main entry point
+main() {
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -w|--worktree)
+                shift
+                if [[ $# -eq 0 ]]; then
+                    echo "Error: --worktree requires a branch name"
+                    exit 1
+                fi
+                local branch="$1"
+                shift
+                tdg_open "$branch" "$@"
+                return
+                ;;
+            -h|--help)
+                usage
+                return 0
+                ;;
+            --)
+                shift
+                break
+                ;;
+            -*)
+                # Unknown flag - pass to AI command
+                break
+                ;;
+            *)
+                # First non-flag arg - pass all to AI command
+                break
+                ;;
+        esac
+    done
+    
+    # Default: open current directory with remaining args as AI command
+    td_open "$PWD" "$@"
+}
+
+main "$@"

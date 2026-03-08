@@ -50,7 +50,7 @@ Each project gets its own Hyprland workspace named `td-<project>`. Running `td` 
 ## Install
 
 ```bash
-git clone https://github.com/user/td.git
+git clone https://github.com/leowio/td.git
 cd td
 ./install.sh
 ```

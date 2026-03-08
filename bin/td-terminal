@@ -1,0 +1,8 @@
+#!/bin/bash
+ws=$(hyprctl activeworkspace -j | jq -r '.name')
+if [[ "$ws" == td-* ]]; then
+    cwd=$(omarchy-cmd-terminal-cwd)
+    exec uwsm-app -- alacritty --class "$ws" --working-directory "${cwd:-$HOME}"
+else
+    exec uwsm-app -- xdg-terminal-exec --dir="$(omarchy-cmd-terminal-cwd)"
+fi

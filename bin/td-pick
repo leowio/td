@@ -1,0 +1,15 @@
+#!/bin/bash
+if pgrep -f "walker --dmenu" > /dev/null; then
+    walker -q 2>/dev/null
+    exit 0
+fi
+
+selection=$(hyprctl workspaces -j \
+    | jq -r '.[] | .name' \
+    | grep '^td-' \
+    | sed 's/^td-//' \
+    | walker --dmenu -p " Project..." --width 400 --maxheight 200 --minheight 200)
+
+if [[ -n "$selection" ]]; then
+    hyprctl dispatch workspace "name:td-$selection"
+fi

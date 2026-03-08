@@ -1,0 +1,72 @@
+#!/bin/bash
+# Spawn td windows in a 3-column layout: nvim 50% | ai 25% | term1/term2 25%
+# Usage: td-layout <class> <dir> [ai_cmd]
+
+cls=$1
+dir=$2
+ai_cmd=${3:-claude --dangerously-skip-permissions}
+
+# Idempotent: if workspace already exists with our windows, just switch
+existing=$(hyprctl workspaces -j | jq -r --arg c "$cls" \
+    '.[] | select(.name == $c) | .id')
+if [[ -n "$existing" ]]; then
+    hyprctl dispatch workspace "name:$cls"
+    exit 0
+fi
+
+# Switch to (or create) the named workspace
+hyprctl dispatch workspace "name:$cls"
+sleep 0.1
+
+wait_for() {
+    local count=$1
+    for _ in $(seq 1 50); do
+        current=$(hyprctl clients -j | jq --arg c "$cls" '[.[] | select(.class == $c)] | length')
+        [[ $current -ge $count ]] && return 0
+        sleep 0.1
+    done
+}
+
+# 1. nvim (full screen)
+hyprctl dispatch exec "uwsm-app -- alacritty --class $cls --working-directory '$dir' -e nvim ."
+wait_for 1
+sleep 0.1
+
+# 2. preselect right → claude goes right of nvim: [nvim | claude]
+hyprctl dispatch layoutmsg "preselect r"
+hyprctl dispatch exec "uwsm-app -- alacritty --class $cls --working-directory '$dir' -e $ai_cmd"
+wait_for 2
+sleep 0.1
+
+# 3. preselect right → term1 goes right of claude: [nvim | claude | term1]
+hyprctl dispatch layoutmsg "preselect r"
+hyprctl dispatch exec "uwsm-app -- alacritty --class $cls --working-directory '$dir'"
+wait_for 3
+sleep 0.1
+
+# 4. preselect down → term2 goes below term1: [nvim | claude | term1/term2]
+hyprctl dispatch layoutmsg "preselect d"
+hyprctl dispatch exec "uwsm-app -- alacritty --class $cls --working-directory '$dir'"
+wait_for 4
+sleep 0.2
+
+# 5. Resize nvim column to 1/3
+nvim_addr=$(hyprctl clients -j | jq -r --arg c "$cls" \
+    '.[] | select(.class == $c) | select(.title | test("nvim"; "i")) | .address' | head -1)
+
+if [[ -z "$nvim_addr" ]]; then
+    while IFS= read -r line; do
+        addr=$(echo "$line" | jq -r '.address')
+        pid=$(echo "$line" | jq -r '.pid')
+        if pstree -p "$pid" | grep -q '[-]nvim('; then
+            nvim_addr="$addr"
+            break
+        fi
+    done < <(hyprctl clients -j | jq -c --arg c "$cls" '.[] | select(.class == $c)')
+fi
+
+if [[ -n "$nvim_addr" ]]; then
+    hyprctl dispatch focuswindow "address:$nvim_addr"
+    sleep 0.05
+    hyprctl dispatch splitratio "exact 0.5"
+fi

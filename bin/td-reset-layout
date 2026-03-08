@@ -1,0 +1,91 @@
+#!/bin/bash
+# Reset td workspace to dwindle: nvim 50% | ai 25% | terminals 25%
+
+ws_name=$(hyprctl activeworkspace -j | jq -r '.name')
+[[ "$ws_name" != td-* ]] && exit 0
+
+cls="$ws_name"
+AI_PATTERN='claude|opencode|codex|kimi'
+
+# Ensure dwindle layout
+ws_id=$(hyprctl activeworkspace -j | jq -r '.id')
+if [[ $ws_id -lt 0 ]]; then
+    hyprctl keyword workspace "name:$ws_name, layout:dwindle"
+else
+    hyprctl keyword workspace "$ws_id, layout:dwindle"
+fi
+sleep 0.15
+
+# Identify windows: nvim, ai tools, terminals
+nvim_addr=""
+ai_addrs=()
+term_addrs=()
+
+while IFS= read -r line; do
+    addr=$(echo "$line" | jq -r '.address')
+    title=$(echo "$line" | jq -r '.title')
+    pid=$(echo "$line" | jq -r '.pid')
+
+    if [[ -z "$nvim_addr" ]] && pstree -p "$pid" | grep -q '[-]nvim('; then
+        nvim_addr="$addr"
+    elif pstree -p "$pid" | grep -qiE "($AI_PATTERN)"; then
+        ai_addrs+=("$addr")
+    else
+        term_addrs+=("$addr")
+    fi
+done < <(hyprctl clients -j | jq -c --arg c "$cls" '.[] | select(.class == $c)')
+
+[[ -z "$nvim_addr" ]] && exit 1
+
+# Move everything except nvim to temp workspace
+for addr in "${ai_addrs[@]}" "${term_addrs[@]}"; do
+    hyprctl dispatch movetoworkspacesilent "special:td-temp, address:$addr"
+done
+sleep 0.1
+
+# Now only nvim is on the workspace — focus it
+hyprctl dispatch focuswindow "address:$nvim_addr"
+sleep 0.05
+
+# Move first AI back (right of nvim)
+if [[ ${#ai_addrs[@]} -ge 1 ]]; then
+    hyprctl dispatch layoutmsg "preselect r"
+    hyprctl dispatch movetoworkspacesilent "name:$ws_name, address:${ai_addrs[0]}"
+    sleep 0.1
+    hyprctl dispatch focuswindow "address:${ai_addrs[0]}"
+    sleep 0.05
+fi
+
+# Stack remaining AI windows below the first
+for ((i=1; i<${#ai_addrs[@]}; i++)); do
+    hyprctl dispatch layoutmsg "preselect d"
+    hyprctl dispatch movetoworkspacesilent "name:$ws_name, address:${ai_addrs[$i]}"
+    sleep 0.1
+done
+
+# Focus last AI (or nvim if no AI) for terminal column
+if [[ ${#ai_addrs[@]} -ge 1 ]]; then
+    hyprctl dispatch focuswindow "address:${ai_addrs[0]}"
+    sleep 0.05
+fi
+
+# Move first terminal back (right of AI column)
+if [[ ${#term_addrs[@]} -ge 1 ]]; then
+    hyprctl dispatch layoutmsg "preselect r"
+    hyprctl dispatch movetoworkspacesilent "name:$ws_name, address:${term_addrs[0]}"
+    sleep 0.1
+    hyprctl dispatch focuswindow "address:${term_addrs[0]}"
+    sleep 0.05
+fi
+
+# Stack remaining terminals below the first
+for ((i=1; i<${#term_addrs[@]}; i++)); do
+    hyprctl dispatch layoutmsg "preselect d"
+    hyprctl dispatch movetoworkspacesilent "name:$ws_name, address:${term_addrs[$i]}"
+    sleep 0.1
+done
+
+# Set nvim to 50%
+hyprctl dispatch focuswindow "address:$nvim_addr"
+sleep 0.05
+hyprctl dispatch splitratio "exact 0.5"

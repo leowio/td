@@ -1,0 +1,34 @@
+#!/bin/bash
+# Toggle a temporary workspace showing all AI windows from td workspaces
+
+WS_NAME="td-ai-overview"
+AI_PATTERN='claude|opencode|codex|kimi'
+
+# Toggle off if overview workspace has windows
+overview=$(hyprctl clients -j | jq -r --arg ws "$WS_NAME" \
+    '.[] | select(.workspace.name == $ws) | [.address, .class] | @tsv')
+
+if [[ -n "$overview" ]]; then
+    focused=$(hyprctl activewindow -j | jq -r '.address')
+    batch=""
+    while IFS=$'\t' read -r addr cls; do
+        batch+="dispatch movetoworkspacesilent name:$cls, address:$addr ;"
+    done <<< "$overview"
+    batch+="dispatch workspace previous ;"
+    batch+="dispatch focuswindow address:$focused"
+    hyprctl --batch "$batch"
+    exit 0
+fi
+
+# Toggle on: find AI windows across all td workspaces
+batch=""
+while IFS=$'\t' read -r addr pid; do
+    if pstree -p "$pid" 2>/dev/null | grep -qiE "($AI_PATTERN)"; then
+        batch+="dispatch movetoworkspacesilent name:$WS_NAME, address:$addr ;"
+    fi
+done < <(hyprctl clients -j | jq -r '.[] | select(.class | startswith("td-")) | [.address, (.pid | tostring)] | @tsv')
+
+[[ -z "$batch" ]] && exit 0
+
+batch+="dispatch workspace name:$WS_NAME"
+hyprctl --batch "$batch"

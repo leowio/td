@@ -28,13 +28,13 @@ wait_for() {
 }
 
 # 1. nvim (full screen)
-hyprctl dispatch exec "uwsm-app -- alacritty --class $cls --working-directory '$dir' -e nvim ."
+hyprctl dispatch exec "uwsm-app -- alacritty --class $cls --working-directory '$dir' -e sh -c 'nvim .; exec \$SHELL'"
 wait_for 1
 sleep 0.1
 
 # 2. preselect right → claude goes right of nvim: [nvim | claude]
 hyprctl dispatch layoutmsg "preselect r"
-hyprctl dispatch exec "uwsm-app -- alacritty --class $cls --working-directory '$dir' -e $ai_cmd"
+hyprctl dispatch exec "uwsm-app -- alacritty --class $cls --working-directory '$dir' -e sh -c '$ai_cmd; exec \$SHELL'"
 wait_for 2
 sleep 0.1
 

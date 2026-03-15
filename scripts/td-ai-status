@@ -1,24 +1,79 @@
 #!/bin/bash
 # td-ai-status - Waybar module showing AI agent status per td workspace
-# Shows bot icon (󰚩) per workspace: dimmed=idle, pulsing=busy, bright+name=attention
-# Supports: claude, codex
+#
+# Each workspace shows: [name] 󰚩󰚩…  (one icon per detected agent)
+#   busy      → icon pulses via CSS (spinner in window title)
+#   attention → icon bright, pinned to theme fg (agent present, no spinner)
+#   no agents → just the name pill, no icons
 
 ICON="󰚩"
+MAX_LABEL=8
 
-# Read foreground color from theme (for attention state pango override)
+# --- Supported AI agents ---
+AI_PROCESSES="claude|codex|aider|cursor-agent"   # pstree process names
+AI_TITLE_KEYWORDS="codex|aider|cursor"           # window title keywords (case-insensitive)
+BRAILLE_PATTERN='[\x{2801}-\x{28FF}]'            # spinner in title → busy
+
+# --- Theme ---
 fg=$(grep -oP '(?<=@define-color foreground )#[0-9a-fA-F]+' \
     ~/.config/omarchy/current/theme/waybar.css)
 fg=${fg:-#cdd6f4}
 
-# Get all td-* workspaces (exclude td-ai-overview)
-workspaces=$(hyprctl workspaces -j 2>/dev/null | jq -r '.[] | .name' | grep '^td-' | grep -v '^td-ai-overview$' | sort)
+# --- Pango helpers ---
+pill() { echo "<span color='$fg' background='$fg' bgalpha='15%'> $1 </span>"; }
+
+truncate() {
+    local s="$1"
+    (( ${#s} > MAX_LABEL )) && echo "${s:0:$MAX_LABEL}…" || echo "$s"
+}
+
+# --- Detect agents per workspace ---
+# Scans each window (pid + title together). Each agent instance gets its own entry.
+# Populates parallel arrays: agent_names[i], agent_states[i]
+detect_agents() {
+    local ws="$1"
+    agent_names=()
+    agent_states=()
+
+    while IFS=$'\t' read -r pid title; do
+        [[ -z "$pid" ]] && continue
+
+        local state="attention"
+        echo "$title" | grep -qP "$BRAILLE_PATTERN" && state="busy"
+
+        # Match agent by window title keyword
+        local found=false name
+        name=$(echo "$title" | grep -oiP "$AI_TITLE_KEYWORDS" | head -1 | tr '[:upper:]' '[:lower:]')
+        if [[ -n "$name" ]]; then
+            agent_names+=("$name")
+            agent_states+=("$state")
+            found=true
+        fi
+
+        # Match agent by process tree
+        while IFS= read -r match; do
+            name=$(echo "$match" | grep -oP '^[^(]+')
+            if ! $found || [[ "$name" != "${agent_names[-1]}" ]]; then
+                agent_names+=("$name")
+                agent_states+=("$state")
+            fi
+        done < <(pstree -p "$pid" 2>/dev/null | grep -oP "($AI_PROCESSES)\\(\\d+\\)")
+
+    done < <(echo "$clients_json" | jq -r ".[] | select(.workspace.name == \"$ws\") | \"\(.pid)\t\(.title)\"")
+}
+
+# --- Main ---
+workspaces=$(hyprctl workspaces -j 2>/dev/null \
+    | jq -r '.[] | .name' \
+    | grep '^td-' \
+    | grep -v '^td-ai-overview$' \
+    | sort)
 
 if [[ -z "$workspaces" ]]; then
     echo '{"text": "", "tooltip": "", "class": "empty"}'
     exit 0
 fi
 
-# Cache clients once
 clients_json=$(hyprctl clients -j 2>/dev/null)
 
 text_parts=()
@@ -28,78 +83,45 @@ has_attention=false
 
 for ws in $workspaces; do
     short="${ws#td-}"
+    label=$(truncate "$short")
 
-    # Get window titles and PIDs for this workspace
-    ws_windows=$(echo "$clients_json" | jq -r ".[] | select(.workspace.name == \"$ws\") | .title")
-    ws_pids=$(echo "$clients_json" | jq -r ".[] | select(.workspace.name == \"$ws\") | .pid")
+    detect_agents "$ws"
 
-    # Truncate name to 8 chars
-    label="$short"
-    if (( ${#label} > 8 )); then
-        label="${label:0:8}…"
-    fi
-
-    # Check titles for braille spinner (U+2801-U+28FF) → busy
-    if echo "$ws_windows" | grep -qP '[\x{2801}-\x{28FF}]'; then
-        has_busy=true
-        task=$(echo "$ws_windows" | grep -P '[\x{2801}-\x{28FF}]' | head -1 | sed 's/^[⠁-⣿] *//')
-        # Busy: bare icon (CSS pulses it), name pinned to fg
-        text_parts+=("<span color='$fg' background='$fg' bgalpha='15%'> $label </span> $ICON")
-        tooltip_parts+=("$short: busy ($task)")
-        continue
-    fi
-
-    # Check titles for codex → attention (codex title always visible when running)
-    if echo "$ws_windows" | grep -qi 'codex'; then
-        has_attention=true
-        text_parts+=("<span color='$fg' background='$fg' bgalpha='15%'> $label </span> <span color='$fg'>$ICON</span>")
-        tooltip_parts+=("$short: codex waiting")
-        continue
-    fi
-
-    # No title indicators — check pstree for claude/codex process
-    ai_name=""
-    for wpid in $ws_pids; do
-        match=$(pstree -p "$wpid" 2>/dev/null | grep -oP '(claude|codex)\(\d+\)' | head -1)
-        if [[ -n "$match" ]]; then
-            ai_name=$(echo "$match" | grep -oP '^[^(]+')
-            break
-        fi
+    icons=""
+    tip_agents=()
+    for i in "${!agent_names[@]}"; do
+        case "${agent_states[$i]}" in
+            busy)      has_busy=true;     icons+=" $ICON" ;;
+            attention) has_attention=true; icons+=" <span color='$fg'>$ICON</span>" ;;
+        esac
+        tip_agents+=("${agent_names[$i]}:${agent_states[$i]}")
     done
 
-    if [[ -n "$ai_name" ]]; then
-        # Attention: icon pinned bright, name pinned to fg
-        has_attention=true
-        text_parts+=("<span color='$fg' background='$fg' bgalpha='15%'> $label </span> <span color='$fg'>$ICON</span>")
-        tooltip_parts+=("$short: $ai_name waiting")
+    text_parts+=("$(pill "$label")$icons")
+
+    if (( ${#agent_names[@]} > 0 )); then
+        tooltip_parts+=("$short: $(IFS=', '; echo "${tip_agents[*]}")")
     else
-        # Idle: icon dimmed, name pinned to fg
-        text_parts+=("<span color='$fg' background='$fg' bgalpha='15%'> $label </span> <span alpha='50%'>$ICON</span>")
-        tooltip_parts+=("$short: idle")
+        tooltip_parts+=("$short: no agents")
     fi
 done
 
-# Build output
+# Join workspaces with double space
 text=$(IFS='|'; echo "${text_parts[*]}")
 text="${text//|/  }"
+
 tooltip=$(printf '%s\\n' "${tooltip_parts[@]}")
 tooltip="${tooltip%\\n}"
 
-# Build class array based on active states
+# CSS class
 classes=()
-if $has_busy; then
-    classes+=("busy")
-fi
-if $has_attention; then
-    classes+=("attention")
-fi
+$has_busy      && classes+=("busy")
+$has_attention && classes+=("attention")
 
-if (( ${#classes[@]} == 0 )); then
-    class_json='"idle"'
-elif (( ${#classes[@]} == 1 )); then
-    class_json="\"${classes[0]}\""
-else
-    class_json="[\"${classes[0]}\", \"${classes[1]}\"]"
-fi
+case ${#classes[@]} in
+    0) class_json='"idle"' ;;
+    1) class_json="\"${classes[0]}\"" ;;
+    *) class_json="[\"${classes[0]}\", \"${classes[1]}\"]" ;;
+esac
 
 printf '{"text": "%s", "tooltip": "%s", "class": %s}\n' "$text" "$tooltip" "$class_json"

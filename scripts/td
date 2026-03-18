@@ -21,7 +21,7 @@ td_open() {
     shift
     local ai_cmd="$*"
     
-    [[ -z "$ai_cmd" ]] && ai_cmd="claude --dangerously-skip-permissions"
+    [[ -z "$ai_cmd" ]] && ai_cmd="${TD_AI_CMD:-claude --dangerously-skip-permissions}"
     
     local project
     project=$(get_project_name "$dir")
@@ -112,6 +112,9 @@ usage() {
     echo "  td --worktree foo codex   Open worktree for 'foo' with 'codex' as AI"
     echo "  td -c my-clone            Clone repo to ../my-clone and open"
     echo "  td --clone my-clone kimi  Clone repo and open with 'kimi' as AI"
+    echo ""
+    echo "Environment:"
+    echo "  TD_AI_CMD                 Default AI command when no ai_args are passed"
 }
 
 # Main entry point

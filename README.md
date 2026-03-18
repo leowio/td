@@ -2,12 +2,12 @@
 
 An opinionated terminal AI layout workflow for Hyprland.
 
-One command spins up a full dev workspace: editor, AI assistant, and terminals — each in its own column, on a dedicated Hyprland workspace.
+One command spins up a full dev workspace: your `$EDITOR`, an AI assistant, and terminals — each in its own column, on a dedicated Hyprland workspace.
 
 ```
  ┌──────────────┬─────────┬─────────┐
  │              │         │  term   │
- │    nvim      │   AI    │─────────│
+ │   editor     │   AI    │─────────│
  │   (50%)      │  (25%)  │  term   │
  │              │         │  (25%)  │
  └──────────────┴─────────┴─────────┘
@@ -16,7 +16,7 @@ One command spins up a full dev workspace: editor, AI assistant, and terminals �
 ## Usage
 
 ```bash
-# Open current directory (AI defaults to claude)
+# Open current directory (AI defaults to $TD_AI_CMD or claude)
 td
 
 # Use a different AI
@@ -39,7 +39,7 @@ Each project gets its own Hyprland workspace named `td-<project>`. Running `td` 
 | Script | Purpose |
 |---|---|
 | `td` | Main entry point — launches the layout or switches to existing workspace |
-| `td-layout` | Spawns the 4 windows (nvim, AI, 2 terminals) in dwindle layout |
+| `td-layout` | Spawns the 4 windows (editor, AI, 2 terminals) in dwindle layout |
 | `td-pick` | Fuzzy project switcher — lists active `td-*` workspaces via walker |
 | `td-reset-layout` | Resets a messy workspace back to the 3-column layout |
 | `td-terminal` | Spawns a new terminal that auto-joins the current td workspace |
@@ -50,6 +50,8 @@ Each project gets its own Hyprland workspace named `td-<project>`. Running `td` 
 - [Alacritty](https://alacritty.org/)
 - [walker](https://github.com/abenz1267/walker) (for `td-pick`)
 - `jq`, `pstree`
+- `$EDITOR` set to the terminal editor command you want to launch (defaults to `nvim`)
+- `$TD_AI_CMD` optionally set to the default AI command (defaults to `claude --dangerously-skip-permissions`)
 
 ## Install
 

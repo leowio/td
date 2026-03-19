@@ -4,7 +4,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 TD_WINDOW_STATE_CMD="$SCRIPT_DIR/td-window-state"
-TD_AGENT_RUN_CMD="$SCRIPT_DIR/td-agent-run"
+TD_AGENT_RUN_CMD="$SCRIPT_DIR/td-agent-run.ts"
 
 cls=$1
 dir=$2

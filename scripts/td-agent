@@ -6,7 +6,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 TD_WINDOW_STATE_CMD="$SCRIPT_DIR/td-window-state"
-TD_AGENT_RUN_CMD="$SCRIPT_DIR/td-agent-run"
+TD_AGENT_RUN_CMD="$SCRIPT_DIR/td-agent-run.ts"
 
 ws=$(hyprctl activeworkspace -j | jq -r '.name')
 
@@ -16,8 +16,7 @@ if [[ -z "$ai_cmd" ]]; then
 fi
 
 if [[ "$ws" != td-* ]]; then
-    printf -v ai_cmd_q '%q' "$ai_cmd"
-    exec hyprctl dispatch exec "env TD_AI_CMD_STR=$ai_cmd_q uwsm-app -- alacritty -e sh -lc 'eval \$TD_AI_CMD_STR; exec \$SHELL'"
+    exec uwsm-app -- alacritty -e $ai_cmd
 fi
 
 cwd=$(omarchy-cmd-terminal-cwd)

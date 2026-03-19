@@ -2,9 +2,17 @@
 # Spawn td windows in a 3-column layout: editor 50% | ai 25% | term1/term2 25%
 # Usage: td-layout <class> <dir> [ai_cmd]
 
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+TD_WINDOW_STATE_CMD="$SCRIPT_DIR/td-window-state"
+TD_AGENT_RUN_CMD="$SCRIPT_DIR/td-agent-run"
+
 cls=$1
 dir=$2
 ai_cmd=${3:-${TD_AI_CMD:-claude --dangerously-skip-permissions}}
+
+printf -v cls_q '%q' "$cls"
+printf -v dir_q '%q' "$dir"
+printf -v ai_cmd_q '%q' "$ai_cmd"
 
 # Idempotent: if workspace already exists with our windows, just switch
 existing=$(hyprctl workspaces -j | jq -r --arg c "$cls" \
@@ -21,7 +29,7 @@ sleep 0.1
 wait_for() {
     local count=$1
     for _ in $(seq 1 50); do
-        current=$(hyprctl clients -j | jq --arg c "$cls" '[.[] | select(.class == $c)] | length')
+        current=$(hyprctl clients -j | jq --arg ws "$cls" '[.[] | select(.workspace.name == $ws)] | length')
         [[ $current -ge $count ]] && return 0
         sleep 0.1
     done
@@ -29,31 +37,29 @@ wait_for() {
 
 window_role() {
     local pid=$1
-    local environ="/proc/$pid/environ"
-    [[ -r "$environ" ]] || return 1
-    tr '\0' '\n' < "$environ" | awk -F= '$1 == "TD_ROLE" { print $2; exit }'
+    "$TD_WINDOW_STATE_CMD" get "$pid" 2>/dev/null | awk -F'\t' 'NR == 1 { print $3 }'
 }
 
 # 1. editor (full screen)
-hyprctl dispatch exec "env TD_ROLE=editor uwsm-app -- alacritty --class $cls --working-directory '$dir' -e sh -lc '\${EDITOR:-nvim} .; exec \$SHELL'"
+hyprctl dispatch exec "env TD_WORKSPACE=$cls_q TD_WINDOW_STATE_CMD=$(printf '%q' "$TD_WINDOW_STATE_CMD") uwsm-app -- alacritty --working-directory $dir_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" editor; \${EDITOR:-nvim} .; exec \$SHELL'"
 wait_for 1
 sleep 0.1
 
 # 2. preselect right → AI goes right of editor: [editor | AI]
 hyprctl dispatch layoutmsg "preselect r"
-hyprctl dispatch exec "env TD_ROLE=ai uwsm-app -- alacritty --class $cls --working-directory '$dir' -e sh -c '$ai_cmd; exec \$SHELL'"
+hyprctl dispatch exec "env TD_WORKSPACE=$cls_q TD_AI_CMD_STR=$ai_cmd_q TD_WINDOW_STATE_CMD=$(printf '%q' "$TD_WINDOW_STATE_CMD") TD_AGENT_RUN_CMD=$(printf '%q' "$TD_AGENT_RUN_CMD") uwsm-app -- alacritty --working-directory $dir_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" ai; \"\$TD_AGENT_RUN_CMD\" --workspace \"\$TD_WORKSPACE\" --command \"\$TD_AI_CMD_STR\"; exec \$SHELL'"
 wait_for 2
 sleep 0.1
 
 # 3. preselect right → term1 goes right of AI: [editor | AI | term1]
 hyprctl dispatch layoutmsg "preselect r"
-hyprctl dispatch exec "env TD_ROLE=term uwsm-app -- alacritty --class $cls --working-directory '$dir'"
+hyprctl dispatch exec "env TD_WORKSPACE=$cls_q TD_WINDOW_STATE_CMD=$(printf '%q' "$TD_WINDOW_STATE_CMD") uwsm-app -- alacritty --working-directory $dir_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" term; exec \$SHELL'"
 wait_for 3
 sleep 0.1
 
 # 4. preselect down → term2 goes below term1: [editor | AI | term1/term2]
 hyprctl dispatch layoutmsg "preselect d"
-hyprctl dispatch exec "env TD_ROLE=term uwsm-app -- alacritty --class $cls --working-directory '$dir'"
+hyprctl dispatch exec "env TD_WORKSPACE=$cls_q TD_WINDOW_STATE_CMD=$(printf '%q' "$TD_WINDOW_STATE_CMD") uwsm-app -- alacritty --working-directory $dir_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" term; exec \$SHELL'"
 wait_for 4
 sleep 0.2
 
@@ -66,7 +72,7 @@ while IFS= read -r line; do
         editor_addr="$addr"
         break
     fi
-done < <(hyprctl clients -j | jq -c --arg c "$cls" '.[] | select(.class == $c)')
+done < <(hyprctl clients -j | jq -c --arg ws "$cls" '.[] | select(.workspace.name == $ws)')
 
 if [[ -n "$editor_addr" ]]; then
     hyprctl dispatch focuswindow "address:$editor_addr"

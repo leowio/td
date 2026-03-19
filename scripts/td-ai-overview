@@ -1,18 +1,22 @@
 #!/bin/bash
 # Toggle a temporary workspace showing all AI windows from td workspaces
 
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+TD_WINDOW_STATE_CMD="$SCRIPT_DIR/td-window-state"
+
 WS_NAME="td-ai-overview"
-AI_PATTERN='claude|opencode|codex|kimi'
 
 # Toggle off if overview workspace has windows
 overview=$(hyprctl clients -j | jq -r --arg ws "$WS_NAME" \
-    '.[] | select(.workspace.name == $ws) | [.address, .class] | @tsv')
+    '.[] | select(.workspace.name == $ws) | [.address, (.pid | tostring)] | @tsv')
 
 if [[ -n "$overview" ]]; then
     focused=$(hyprctl activewindow -j | jq -r '.address')
     batch=""
-    while IFS=$'\t' read -r addr cls; do
-        batch+="dispatch movetoworkspacesilent name:$cls, address:$addr ;"
+    while IFS=$'\t' read -r addr pid; do
+        original_ws=$("$TD_WINDOW_STATE_CMD" get "$pid" 2>/dev/null | awk -F'\t' 'NR == 1 { print $2 }')
+        [[ -n "$original_ws" ]] || continue
+        batch+="dispatch movetoworkspacesilent name:$original_ws, address:$addr ;"
     done <<< "$overview"
     batch+="dispatch workspace previous ;"
     batch+="dispatch focuswindow address:$focused"
@@ -22,11 +26,12 @@ fi
 
 # Toggle on: find AI windows across all td workspaces
 batch=""
-while IFS=$'\t' read -r addr pid; do
-    if pstree -p "$pid" 2>/dev/null | grep -qiE "($AI_PATTERN)"; then
-        batch+="dispatch movetoworkspacesilent name:$WS_NAME, address:$addr ;"
-    fi
-done < <(hyprctl clients -j | jq -r '.[] | select(.class | startswith("td-")) | [.address, (.pid | tostring)] | @tsv')
+while IFS=$'\t' read -r pid workspace role created_at; do
+    [[ "$role" == "ai" ]] || continue
+    addr=$(hyprctl clients -j | jq -r --arg pid "$pid" '.[] | select((.pid | tostring) == $pid) | .address' | head -1)
+    [[ -n "$addr" ]] || continue
+    batch+="dispatch movetoworkspacesilent name:$WS_NAME, address:$addr ;"
+done < <("$TD_WINDOW_STATE_CMD" list)
 
 [[ -z "$batch" ]] && exit 0
 

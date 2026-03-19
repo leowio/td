@@ -2,15 +2,19 @@
 # td-ai-status - Waybar module showing AI agent status per td workspace
 #
 # Each workspace shows: [name] 󰚩󰚩…  (one icon per detected agent)
-#   busy      → icon pulses via CSS (spinner in window title)
-#   attention → icon bright, pinned to theme fg (agent present, no spinner)
+#   busy      → icon pulses via CSS
+#   attention → icon bright, pinned to theme fg
 #   no agents → just the name pill, no icons
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+TD_WINDOW_STATE_CMD="$SCRIPT_DIR/td-window-state"
 
 ICON="󰚩"
 MAX_LABEL=8
+STATE_DIR="${TD_AI_STATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/td-ai-state}"
+DEAD_GRACE=5
 
 # --- Supported AI agents ---
-AI_PROCESSES="claude|codex|aider|cursor-agent"   # pstree process names
 AI_TITLE_KEYWORDS="codex|aider|cursor"           # window title keywords (case-insensitive)
 BRAILLE_PATTERN='[\x{2801}-\x{28FF}]'            # spinner in title → busy
 
@@ -27,39 +31,71 @@ truncate() {
     (( ${#s} > MAX_LABEL )) && echo "${s:0:$MAX_LABEL}…" || echo "$s"
 }
 
-# --- Detect agents per workspace ---
-# Scans each window (pid + title together). Each agent instance gets its own entry.
-# Populates parallel arrays: agent_names[i], agent_states[i]
-detect_agents() {
+add_agent() {
     local ws="$1"
-    agent_names=()
-    agent_states=()
+    local name="$2"
+    local state="$3"
+    agent_names+=("$name")
+    agent_states+=("$state")
+    seen_agents["$ws:$name"]=1
+}
 
-    while IFS=$'\t' read -r pid title; do
-        [[ -z "$pid" ]] && continue
+detect_wrapped_agents() {
+    local ws="$1"
+    local now
+    now=$(date +%s)
 
-        local state="attention"
-        echo "$title" | grep -qP "$BRAILLE_PATTERN" && state="busy"
+    [[ -d "$STATE_DIR" ]] || return 1
 
-        # Match agent by window title keyword
-        local found=false name
-        name=$(echo "$title" | grep -oiP "$AI_TITLE_KEYWORDS" | head -1 | tr '[:upper:]' '[:lower:]')
-        if [[ -n "$name" ]]; then
-            agent_names+=("$name")
-            agent_states+=("$state")
-            found=true
+    local file workspace name state pid updated_at source
+    local found=1
+    for file in "$STATE_DIR"/*.state; do
+        [[ -e "$file" ]] || continue
+        IFS=$'\t' read -r workspace name state pid updated_at source < "$file" || continue
+        [[ "$workspace" == "$ws" ]] || continue
+
+        if ! kill -0 "$pid" 2>/dev/null; then
+            rm -f "$file"
+            continue
         fi
 
-        # Match agent by process tree
-        while IFS= read -r match; do
-            name=$(echo "$match" | grep -oP '^[^(]+')
-            if ! $found || [[ "$name" != "${agent_names[-1]}" ]]; then
-                agent_names+=("$name")
-                agent_states+=("$state")
+        if [[ -n "$updated_at" ]]; then
+            local updated_epoch=${updated_at%%.*}
+            if (( now - updated_epoch > DEAD_GRACE )); then
+                state="dead"
             fi
-        done < <(pstree -p "$pid" 2>/dev/null | grep -oP "($AI_PROCESSES)\\(\\d+\\)")
+        fi
 
-    done < <(echo "$clients_json" | jq -r ".[] | select(.workspace.name == \"$ws\") | \"\(.pid)\t\(.title)\"")
+        case "$state" in
+            dead)
+                rm -f "$file"
+                continue
+                ;;
+            busy|attention|idle)
+                add_agent "$ws" "$name" "$state"
+                found=0
+                ;;
+        esac
+    done
+
+    return "$found"
+}
+
+detect_fallback_agents() {
+    local ws="$1"
+    local pid workspace role created_at title state name
+
+    while IFS=$'\t' read -r pid workspace role created_at; do
+        [[ "$role" == "ai" ]] || continue
+        local state="attention"
+        title=$(echo "$clients_json" | jq -r --arg pid "$pid" '.[] | select((.pid | tostring) == $pid) | .title' | head -1)
+        echo "$title" | grep -qP "$BRAILLE_PATTERN" && state="busy"
+
+        name=$(echo "$title" | grep -oiP "$AI_TITLE_KEYWORDS" | head -1 | tr '[:upper:]' '[:lower:]')
+        [[ -z "$name" ]] && name="ai"
+        [[ -n "${seen_agents["$ws:$name"]}" ]] && continue
+        add_agent "$ws" "$name" "$state"
+    done < <("$TD_WINDOW_STATE_CMD" list --workspace "$ws" --role ai)
 }
 
 # --- Main ---
@@ -80,19 +116,25 @@ text_parts=()
 tooltip_parts=()
 has_busy=false
 has_attention=false
+declare -A seen_agents
 
 for ws in $workspaces; do
     short="${ws#td-}"
     label=$(truncate "$short")
 
-    detect_agents "$ws"
+    agent_names=()
+    agent_states=()
+    detect_wrapped_agents "$ws" || true
+    if (( ${#agent_names[@]} == 0 )); then
+        detect_fallback_agents "$ws"
+    fi
 
     icons=""
     tip_agents=()
     for i in "${!agent_names[@]}"; do
         case "${agent_states[$i]}" in
             busy)      has_busy=true;     icons+=" $ICON" ;;
-            attention) has_attention=true; icons+=" <span color='$fg'>$ICON</span>" ;;
+            attention|idle) has_attention=true; icons+=" <span color='$fg'>$ICON</span>" ;;
         esac
         tip_agents+=("${agent_names[$i]}:${agent_states[$i]}")
     done

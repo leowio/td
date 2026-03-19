@@ -1,0 +1,30 @@
+#!/bin/bash
+# td-agent - spawn a wrapped AI terminal in the current td workspace
+# Usage: td-agent [ai_args...]
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+TD_WINDOW_STATE_CMD="$SCRIPT_DIR/td-window-state"
+TD_AGENT_RUN_CMD="$SCRIPT_DIR/td-agent-run"
+
+ws=$(hyprctl activeworkspace -j | jq -r '.name')
+
+ai_cmd="$*"
+if [[ -z "$ai_cmd" ]]; then
+    ai_cmd="${TD_AI_CMD:-claude --dangerously-skip-permissions}"
+fi
+
+if [[ "$ws" != td-* ]]; then
+    printf -v ai_cmd_q '%q' "$ai_cmd"
+    exec hyprctl dispatch exec "env TD_AI_CMD_STR=$ai_cmd_q uwsm-app -- alacritty -e sh -lc 'eval \$TD_AI_CMD_STR; exec \$SHELL'"
+fi
+
+cwd=$(omarchy-cmd-terminal-cwd)
+cwd=${cwd:-$PWD}
+
+printf -v ws_q '%q' "$ws"
+printf -v cwd_q '%q' "$cwd"
+printf -v ai_cmd_q '%q' "$ai_cmd"
+
+exec hyprctl dispatch exec "env TD_WORKSPACE=$ws_q TD_AI_CMD_STR=$ai_cmd_q TD_WINDOW_STATE_CMD=$(printf '%q' "$TD_WINDOW_STATE_CMD") TD_AGENT_RUN_CMD=$(printf '%q' "$TD_AGENT_RUN_CMD") uwsm-app -- alacritty --working-directory $cwd_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" ai; \"\$TD_AGENT_RUN_CMD\" --workspace \"\$TD_WORKSPACE\" --command \"\$TD_AI_CMD_STR\"; exec \$SHELL'"

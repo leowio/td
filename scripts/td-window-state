@@ -1,0 +1,140 @@
+#!/bin/bash
+
+set -euo pipefail
+
+STATE_DIR="${TD_WINDOW_STATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/td-window-state}"
+
+mkdir -p "$STATE_DIR"
+
+process_comm() {
+    ps -o comm= -p "$1" 2>/dev/null | tr -d '[:space:]'
+}
+
+process_ppid() {
+    ps -o ppid= -p "$1" 2>/dev/null | tr -d '[:space:]'
+}
+
+resolve_window_pid() {
+    local pid="$1"
+    local comm parent
+
+    comm=$(process_comm "$pid")
+    parent=$(process_ppid "$pid")
+
+    case "$comm" in
+        sh|bash|zsh|fish|nu)
+            [[ -n "$parent" ]] && printf '%s\n' "$parent" || printf '%s\n' "$pid"
+            ;;
+        *)
+            printf '%s\n' "$pid"
+            ;;
+    esac
+}
+
+cleanup_stale() {
+    local file pid
+    for file in "$STATE_DIR"/*.state; do
+        [[ -e "$file" ]] || continue
+        pid=${file##*/}
+        pid=${pid%.state}
+        if ! kill -0 "$pid" 2>/dev/null; then
+            rm -f "$file"
+        fi
+    done
+}
+
+register_window() {
+    local workspace="$1"
+    local role="$2"
+    local pid="${3:-$(resolve_window_pid "$PPID")}"
+    local path="$STATE_DIR/$pid.state"
+    local tmp_path="${path}.tmp"
+
+    printf '%s\t%s\t%s\n' "$workspace" "$role" "$(date +%s)" > "$tmp_path"
+    mv "$tmp_path" "$path"
+}
+
+get_window() {
+    local pid="$1"
+    local path="$STATE_DIR/$pid.state"
+    local file file_pid
+
+    if [[ ! -r "$path" ]]; then
+        for file in "$STATE_DIR"/*.state; do
+            [[ -e "$file" ]] || continue
+            file_pid=${file##*/}
+            file_pid=${file_pid%.state}
+            if [[ "$(resolve_window_pid "$file_pid")" == "$pid" ]]; then
+                path="$file"
+                break
+            fi
+        done
+    fi
+
+    [[ -r "$path" ]] || exit 1
+    if ! kill -0 "$pid" 2>/dev/null; then
+        rm -f "$path"
+        exit 1
+    fi
+
+    printf '%s\t' "$pid"
+    cat "$path"
+}
+
+list_windows() {
+    local workspace=""
+    local role=""
+    local path pid file_workspace file_role created_at canonical_pid
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --workspace)
+                workspace="$2"
+                shift 2
+                ;;
+            --role)
+                role="$2"
+                shift 2
+                ;;
+            *)
+                echo "Unknown option: $1" >&2
+                exit 1
+                ;;
+        esac
+    done
+
+    cleanup_stale
+
+    for path in "$STATE_DIR"/*.state; do
+        [[ -e "$path" ]] || continue
+        pid=${path##*/}
+        pid=${pid%.state}
+        canonical_pid=$(resolve_window_pid "$pid")
+        IFS=$'\t' read -r file_workspace file_role created_at < "$path" || continue
+        [[ -n "$workspace" && "$file_workspace" != "$workspace" ]] && continue
+        [[ -n "$role" && "$file_role" != "$role" ]] && continue
+        printf '%s\t%s\t%s\t%s\n' "$canonical_pid" "$file_workspace" "$file_role" "$created_at"
+    done
+}
+
+case "${1:-}" in
+    register)
+        shift
+        register_window "$@"
+        ;;
+    get)
+        shift
+        get_window "$@"
+        ;;
+    list)
+        shift
+        list_windows "$@"
+        ;;
+    cleanup)
+        cleanup_stale
+        ;;
+    *)
+        echo "Usage: td-window-state {register <workspace> <role> [pid]|get <pid>|list [--workspace <ws>] [--role <role>]|cleanup}" >&2
+        exit 1
+        ;;
+esac

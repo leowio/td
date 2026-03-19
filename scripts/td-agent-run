@@ -1,0 +1,309 @@
+#!/usr/bin/env python3
+
+import argparse
+import fcntl
+import os
+import pty
+import re
+import select
+import shlex
+import signal
+import subprocess
+import sys
+import termios
+import time
+import tty
+from pathlib import Path
+
+
+BRAILLE_RE = re.compile(r"[\u2801-\u28ff]")
+OSC_TITLE_RE = re.compile(r"\x1b\][0-2];?(.*?)\x07|\x1b\][0-2];?(.*?)\x1b\\", re.DOTALL)
+STRIP_ANSI_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\].*?(?:\x07|\x1b\\))")
+STATUS_LINE_RE = re.compile(
+    r"\b(thinking|planning|analyz(?:e|ing)|searching|reading|writing|editing|applying|running|executing)\b",
+    re.IGNORECASE,
+)
+DEFAULT_BUSY_GRACE = 2.0
+DEFAULT_IDLE_GRACE = 45.0
+DEFAULT_STATE = "attention"
+SUPPORTED_AGENTS = {"claude", "codex"}
+
+
+def state_dir() -> Path:
+    runtime_dir = os.environ.get("TD_AI_STATE_DIR")
+    if not runtime_dir:
+        runtime_base = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+        runtime_dir = os.path.join(runtime_base, "td-ai-state")
+    path = Path(runtime_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def detect_agent(command: str, explicit: str | None) -> str:
+    if explicit and explicit != "auto":
+        return explicit
+
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+
+    if not tokens:
+        return "unknown"
+
+    for token in tokens:
+        lowered = os.path.basename(token).lower()
+        if "claude" in lowered:
+            return "claude"
+        if "codex" in lowered:
+            return "codex"
+
+    for token in tokens:
+        base = os.path.basename(token)
+        if base in {"env", "command", "builtin", "exec"} or "=" in base:
+            continue
+        return base.lower()
+
+    return "unknown"
+
+
+def record_path(pid: int) -> Path:
+    return state_dir() / f"{pid}.state"
+
+
+def write_record(pid: int, workspace: str, agent: str, state: str, source: str) -> None:
+    path = record_path(pid)
+    tmp_path = path.with_suffix(".tmp")
+    updated_at = f"{time.time():.3f}"
+    tmp_path.write_text(f"{workspace}\t{agent}\t{state}\t{pid}\t{updated_at}\t{source}\n", encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
+def remove_record(pid: int) -> None:
+    try:
+        record_path(pid).unlink()
+    except FileNotFoundError:
+        pass
+
+
+class StateTracker:
+    def __init__(self, agent: str, workspace: str, pid: int) -> None:
+        self.agent = agent
+        self.workspace = workspace
+        self.pid = pid
+        self.state = DEFAULT_STATE
+        self.source = "wrapper"
+        self.last_output_at = 0.0
+        self.last_submit_at = 0.0
+        self.busy_until = 0.0
+        self.last_title = ""
+        self.tail = ""
+        self.last_written_state: tuple[str, str] | None = None
+        self.flush()
+
+    def flush(self) -> None:
+        snapshot = (self.state, self.source)
+        if snapshot == self.last_written_state:
+            return
+        write_record(self.pid, self.workspace, self.agent, self.state, self.source)
+        self.last_written_state = snapshot
+
+    def set_state(self, state: str, source: str) -> None:
+        if self.state == state and self.source == source:
+            return
+        self.state = state
+        self.source = source
+        self.flush()
+
+    def note_submit(self) -> None:
+        now = time.time()
+        self.last_submit_at = now
+        self.busy_until = max(self.busy_until, now + DEFAULT_BUSY_GRACE)
+
+    def note_title(self, title: str) -> None:
+        if not title:
+            return
+        self.last_title = title
+        if BRAILLE_RE.search(title):
+            self.busy_until = max(self.busy_until, time.time() + DEFAULT_BUSY_GRACE)
+            self.set_state("busy", "title")
+        elif self.source == "title":
+            self.set_state("attention", "title")
+
+    def note_output(self, data: bytes) -> None:
+        now = time.time()
+        self.last_output_at = now
+        text = data.decode("utf-8", errors="ignore")
+
+        for match in OSC_TITLE_RE.finditer(text):
+            title = match.group(1) or match.group(2) or ""
+            self.note_title(title)
+
+        stripped = STRIP_ANSI_RE.sub("", text)
+        self.tail = (self.tail + stripped)[-4096:]
+
+        if self.agent == "codex" and STATUS_LINE_RE.search(self.tail):
+            self.busy_until = max(self.busy_until, now + DEFAULT_BUSY_GRACE)
+            self.set_state("busy", "output")
+            return
+
+        if self.last_submit_at and now - self.last_submit_at <= DEFAULT_BUSY_GRACE:
+            self.busy_until = max(self.busy_until, now + DEFAULT_BUSY_GRACE)
+            self.set_state("busy", "submit")
+            return
+
+        if self.state != "busy":
+            self.set_state("attention", "output")
+
+    def tick(self) -> None:
+        now = time.time()
+        if self.state == "busy" and now >= self.busy_until and not BRAILLE_RE.search(self.last_title):
+            if self.last_output_at and now - self.last_output_at >= DEFAULT_IDLE_GRACE:
+                self.set_state("idle", "silence")
+            else:
+                self.set_state("attention", self.source if self.source != "submit" else "output")
+        elif self.state == "attention" and self.last_output_at and now - self.last_output_at >= DEFAULT_IDLE_GRACE:
+            self.set_state("idle", "silence")
+
+
+def get_winsize(fd: int) -> bytes | None:
+    if not os.isatty(fd):
+        return None
+    try:
+        return fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\0" * 8)
+    except OSError:
+        return None
+
+
+def set_winsize(fd: int, winsize: bytes | None) -> None:
+    if winsize is None:
+        return
+    try:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
+    except OSError:
+        pass
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Run a td AI command with low-overhead state tracking.")
+    parser.add_argument("--agent", default="auto", help="Normalized agent id (default: auto-detect)")
+    parser.add_argument("--workspace", default=os.environ.get("TD_WORKSPACE", ""), help="td workspace name")
+    parser.add_argument("--command", help="Shell command string to execute")
+    parser.add_argument("remainder", nargs=argparse.REMAINDER, help="Command after --")
+    args = parser.parse_args()
+
+    if args.command:
+        command = args.command
+    elif args.remainder:
+        remainder = args.remainder
+        if remainder and remainder[0] == "--":
+            remainder = remainder[1:]
+        command = " ".join(shlex.quote(part) for part in remainder)
+    else:
+        parser.error("missing command")
+
+    agent = detect_agent(command, args.agent)
+
+    master_fd, slave_fd = pty.openpty()
+    winsize = get_winsize(sys.stdin.fileno())
+    set_winsize(slave_fd, winsize)
+
+    child_env = os.environ.copy()
+    child_env["TD_AI_AGENT"] = agent
+    child_env["TD_AI_WORKSPACE"] = args.workspace
+    proc = subprocess.Popen(
+        ["/bin/sh", "-lc", command],
+        stdin=slave_fd,
+        stdout=slave_fd,
+        stderr=slave_fd,
+        env=child_env,
+        start_new_session=True,
+        close_fds=True,
+    )
+    os.close(slave_fd)
+
+    tracker = None
+    if agent in SUPPORTED_AGENTS and args.workspace:
+        tracker = StateTracker(agent=agent, workspace=args.workspace, pid=proc.pid)
+
+    def forward_signal(signum, _frame) -> None:
+        if proc.poll() is None:
+            try:
+                os.killpg(proc.pid, signum)
+            except ProcessLookupError:
+                pass
+
+    def resize_signal(_signum, _frame) -> None:
+        set_winsize(master_fd, get_winsize(sys.stdin.fileno()))
+
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, forward_signal)
+    signal.signal(signal.SIGWINCH, resize_signal)
+
+    stdin_fd = sys.stdin.fileno()
+    stdout_fd = sys.stdout.fileno()
+    stdin_tty = os.isatty(stdin_fd)
+    stdin_open = True
+    old_term = None
+
+    if stdin_tty:
+        old_term = termios.tcgetattr(stdin_fd)
+        tty.setraw(stdin_fd)
+
+    try:
+        while True:
+            if tracker is not None:
+                tracker.tick()
+            if proc.poll() is not None:
+                break
+
+            read_fds = [master_fd]
+            if stdin_open:
+                read_fds.append(stdin_fd)
+
+            ready, _, _ = select.select(read_fds, [], [], 1.0)
+
+            if master_fd in ready:
+                try:
+                    data = os.read(master_fd, 4096)
+                except OSError:
+                    data = b""
+                if not data:
+                    break
+                os.write(stdout_fd, data)
+                if tracker is not None:
+                    tracker.note_output(data)
+
+            if stdin_open and stdin_fd in ready:
+                try:
+                    data = os.read(stdin_fd, 4096)
+                except OSError:
+                    data = b""
+                if not data:
+                    stdin_open = False
+                else:
+                    if b"\r" in data or b"\n" in data:
+                        if tracker is not None:
+                            tracker.note_submit()
+                    try:
+                        os.write(master_fd, data)
+                    except OSError:
+                        stdin_open = False
+
+        return_code = proc.wait()
+        if tracker is not None:
+            tracker.set_state("dead", "exit")
+        return return_code
+    finally:
+        if old_term is not None:
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_term)
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+        if tracker is not None:
+            remove_record(proc.pid)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

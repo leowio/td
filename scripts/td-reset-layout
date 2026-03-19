@@ -1,11 +1,11 @@
 #!/bin/bash
-# Reset td workspace to dwindle: editor 50% | ai 25% | terminals 25%
+# Reset td workspace to dwindle: editor/browser 50% | ai 25% | terminals 25%
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+TD_WINDOW_STATE_CMD="$SCRIPT_DIR/td-window-state"
 
 ws_name=$(hyprctl activeworkspace -j | jq -r '.name')
 [[ "$ws_name" != td-* ]] && exit 0
-
-cls="$ws_name"
-AI_PATTERN='claude|opencode|codex|kimi'
 
 # Ensure dwindle layout
 ws_id=$(hyprctl activeworkspace -j | jq -r '.id')
@@ -18,13 +18,12 @@ sleep 0.15
 
 window_role() {
     local pid=$1
-    local environ="/proc/$pid/environ"
-    [[ -r "$environ" ]] || return 1
-    tr '\0' '\n' < "$environ" | awk -F= '$1 == "TD_ROLE" { print $2; exit }'
+    "$TD_WINDOW_STATE_CMD" get "$pid" 2>/dev/null | awk -F'\t' 'NR == 1 { print $3 }'
 }
 
-# Identify windows: editor, ai tools, terminals
+# Identify windows: editor, browser, ai tools, terminals
 editor_addr=""
+browser_addrs=()
 ai_addrs=()
 term_addrs=()
 
@@ -35,21 +34,21 @@ while IFS= read -r line; do
 
     if [[ "$role" == "editor" ]]; then
         editor_addr="$addr"
-    elif pstree -p "$pid" | grep -qiE "($AI_PATTERN)"; then
+    elif [[ "$role" == "browser" ]]; then
+        browser_addrs+=("$addr")
+    elif [[ "$role" == "ai" ]]; then
         ai_addrs+=("$addr")
     elif [[ "$role" == "term" ]]; then
         term_addrs+=("$addr")
-    elif [[ -z "$editor_addr" ]] && pstree -p "$pid" | grep -q '[-]nvim('; then
-        editor_addr="$addr"
     else
         term_addrs+=("$addr")
     fi
-done < <(hyprctl clients -j | jq -c --arg c "$cls" '.[] | select(.class == $c)')
+done < <(hyprctl clients -j | jq -c --arg ws "$ws_name" '.[] | select(.workspace.name == $ws)')
 
 [[ -z "$editor_addr" ]] && exit 1
 
 # Move everything except the editor to temp workspace
-for addr in "${ai_addrs[@]}" "${term_addrs[@]}"; do
+for addr in "${browser_addrs[@]}" "${ai_addrs[@]}" "${term_addrs[@]}"; do
     hyprctl dispatch movetoworkspacesilent "special:td-temp, address:$addr"
 done
 sleep 0.1
@@ -93,6 +92,24 @@ fi
 for ((i=1; i<${#term_addrs[@]}; i++)); do
     hyprctl dispatch layoutmsg "preselect d"
     hyprctl dispatch movetoworkspacesilent "name:$ws_name, address:${term_addrs[$i]}"
+    sleep 0.1
+done
+
+# Move first browser back (below editor) after the right-side columns exist
+if [[ ${#browser_addrs[@]} -ge 1 ]]; then
+    hyprctl dispatch focuswindow "address:$editor_addr"
+    sleep 0.05
+    hyprctl dispatch layoutmsg "preselect d"
+    hyprctl dispatch movetoworkspacesilent "name:$ws_name, address:${browser_addrs[0]}"
+    sleep 0.1
+    hyprctl dispatch focuswindow "address:${browser_addrs[0]}"
+    sleep 0.05
+fi
+
+# Stack remaining browser windows below the first
+for ((i=1; i<${#browser_addrs[@]}; i++)); do
+    hyprctl dispatch layoutmsg "preselect d"
+    hyprctl dispatch movetoworkspacesilent "name:$ws_name, address:${browser_addrs[$i]}"
     sleep 0.1
 done
 

@@ -23,6 +23,14 @@ td
 td kimi
 td codex
 
+# Launch another wrapped agent in the current td workspace
+td-agent codex
+td-agent claude --dangerously-skip-permissions
+
+# Launch a tracked browser window in the current td workspace
+td-browser
+td-browser https://example.com
+
 # Open a git worktree branch
 td -w feature-branch
 td --worktree feature-branch codex
@@ -34,11 +42,21 @@ td --clone my-clone kimi
 
 Each project gets its own Hyprland workspace named `td-<project>`. Running `td` again in the same directory switches to the existing workspace instead of creating a new one.
 
+Working-state tracking in the status module is wrapper-backed for supported agents (`claude`, `codex`). Other agents still fall back to lightweight presence detection.
+
+td also keeps lightweight runtime metadata for each spawned td window, so workspace reset/overview logic can use recorded roles instead of relying on terminal class prefixes or process-tree walking.
+
+`td-browser` launches a new browser window, tracks it as a `browser` role, and places it under the editor branch. When you reset the layout, browser windows are restored after the AI and terminal columns are rebuilt, so they stay attached below the editor pane instead of joining the terminal column.
+
 ## Scripts
 
 | Script | Purpose |
 |---|---|
 | `td` | Main entry point — launches the layout or switches to existing workspace |
+| `td-agent` | Spawns another wrapped AI terminal in the current `td-*` workspace |
+| `td-agent-run` | PTY wrapper that tracks supported AI sessions and writes runtime state |
+| `td-browser` | Launches a new tracked browser window in the current `td-*` workspace |
+| `td-window-state` | Internal runtime metadata helper for td window roles and workspaces |
 | `td-layout` | Spawns the 4 windows (editor, AI, 2 terminals) in dwindle layout |
 | `td-pick` | Fuzzy project switcher — lists active `td-*` workspaces via walker |
 | `td-reset-layout` | Resets a messy workspace back to the 3-column layout |
@@ -49,7 +67,7 @@ Each project gets its own Hyprland workspace named `td-<project>`. Running `td` 
 - [Hyprland](https://hyprland.org/) (dwindle layout)
 - [Alacritty](https://alacritty.org/)
 - [walker](https://github.com/abenz1267/walker) (for `td-pick`)
-- `jq`, `pstree`
+- `jq`
 - `$EDITOR` set to the terminal editor command you want to launch (defaults to `nvim`)
 - `$TD_AI_CMD` optionally set to the default AI command (defaults to `claude --dangerously-skip-permissions`)
 

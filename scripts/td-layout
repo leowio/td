@@ -22,8 +22,17 @@ if [[ -n "$existing" ]]; then
     exit 0
 fi
 
-# Switch to (or create) the named workspace
-hyprctl dispatch workspace "name:$cls"
+# Find first available workspace number > 5
+used=$(hyprctl workspaces -j | jq '[.[].id | select(. > 5)] | sort')
+ws_num=6
+while jq -e --argjson n "$ws_num" 'index($n) != null' <<< "$used" >/dev/null 2>&1; do
+    ((ws_num++))
+done
+
+# Create numbered workspace and rename it
+hyprctl dispatch workspace "$ws_num"
+sleep 0.1
+hyprctl dispatch renameworkspace "$ws_num" "$cls"
 sleep 0.1
 
 wait_for() {

@@ -77,8 +77,7 @@ launch_browser_window() {
 
 ws=$(hyprctl activeworkspace -j | jq -r '.name')
 if [[ "$ws" != td-* ]]; then
-    launch_browser_window "${1:-about:blank}"
-    exit $?
+    exec omarchy-launch-browser ${1:+"$1"}
 fi
 
 target="${1:-about:blank}"

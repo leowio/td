@@ -2,11 +2,15 @@
 set -e
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
+BIN="${HOME}/.local/bin"
 
-mkdir -p ~/.local/bin
+mkdir -p "$BIN"
 
+shopt -s nullglob
 for f in "$DIR"/scripts/*; do
-    ln -sf "$f" ~/.local/bin/
+    [[ -f "$f" ]] || continue
+    chmod +x "$f"
+    ln -sf "$f" "$BIN/$(basename "$f")"
 done
 
-echo "Installed: bin scripts → ~/.local/bin/"
+echo "Installed scripts from $DIR/scripts/ → $BIN/"

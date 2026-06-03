@@ -1,0 +1,151 @@
+#!/bin/bash
+# td-spawn - Spawn an AI panel with a starting message automatically sent.
+# Primarily used by agents to spawn themselves with predefined prompts.
+#
+# Usage: td-spawn [options] [--] [ai_args...]
+# Options:
+#   -m, --message <msg>       Starting message to auto-send to the AI panel
+#   -a, --agent <cmd>         AI command to run (default: TD_AI_CMD or claude)
+#   -w, --workspace <ws>      Target workspace (default: current td-* workspace)
+#   -d, --directory <dir>     Working directory (default: current directory)
+#   -t, --title <title>       Window title hint for focusing
+#   -h, --help                Show this help message
+#
+# Environment:
+#   TD_AI_CMD                 Default AI command
+#   TD_WORKSPACE              Override target workspace
+#
+# Examples:
+#   td-spawn -m "Review this PR"
+#   td-spawn -a codex -m "Fix the bug in src/main.ts"
+#   td-spawn -w td-myproject -m "Run tests" -- --dangerously-skip-permissions
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+TD_WINDOW_STATE_CMD="$SCRIPT_DIR/td-window-state"
+TD_AGENT_RUN_CMD="$SCRIPT_DIR/td-agent-run.ts"
+
+# Defaults
+message=""
+agent_cmd=""
+workspace=""
+directory=""
+title=""
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -m|--message)
+            message="$2"
+            shift 2
+            ;;
+        -a|--agent)
+            agent_cmd="$2"
+            shift 2
+            ;;
+        -w|--workspace)
+            workspace="$2"
+            shift 2
+            ;;
+        -d|--directory)
+            directory="$2"
+            shift 2
+            ;;
+        -t|--title)
+            title="$2"
+            shift 2
+            ;;
+        -h|--help)
+            sed -n '/^# td-spawn/,/^# Examples/p' "$0" | sed 's/^# //; s/^#//'
+            exit 0
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            exit 1
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+# Remaining args become the AI command
+if [[ $# -gt 0 ]]; then
+    agent_cmd="$*"
+fi
+
+# Resolve defaults
+if [[ -z "$agent_cmd" ]]; then
+    agent_cmd="${TD_AI_CMD:-claude --dangerously-skip-permissions}"
+fi
+
+if [[ -z "$directory" ]]; then
+    if command -v omarchy-cmd-terminal-cwd &>/dev/null; then
+        directory=$(omarchy-cmd-terminal-cwd)
+    fi
+    directory="${directory:-$PWD}"
+fi
+
+if [[ -z "$workspace" ]]; then
+    workspace="${TD_WORKSPACE:-}"
+    if [[ -z "$workspace" ]]; then
+        workspace=$(hyprctl activeworkspace -j | jq -r '.name')
+        if [[ "$workspace" != td-* ]]; then
+            # Not in a td workspace; spawn standalone like td-agent does
+            printf '%q\n' "$message" >/dev/null 2>&1 || true
+            exec uwsm-app -- alacritty --working-directory "$(printf '%q' "$directory")" -e sh -lc "$(printf '%q' "$agent_cmd")"
+        fi
+    fi
+fi
+
+# Embed message using agent's native CLI support when available
+if [[ -n "$message" ]]; then
+    # Detect opencode (strip env/exec prefixes)
+    cmd_check="$agent_cmd"
+    cmd_check="${cmd_check#env }"
+    cmd_check="${cmd_check#command }"
+    cmd_check="${cmd_check#builtin }"
+    cmd_check="${cmd_check#exec }"
+    first_token="${cmd_check%% *}"
+    first_token="$(basename "$first_token")"
+    
+    if [[ "$first_token" == "opencode" ]]; then
+        # Check for subcommands
+        rest="${cmd_check#opencode}"
+        rest="${rest# }"
+        subcmd="${rest%% *}"
+        
+        if [[ -z "$subcmd" || "$subcmd" == -* ]]; then
+            # TUI mode: use --prompt
+            agent_cmd="$agent_cmd --prompt $(printf '%q' "$message")"
+            message=""
+        elif [[ "$subcmd" == "run" ]]; then
+            # Run mode: append as positional args
+            agent_cmd="$agent_cmd $(printf '%q' "$message")"
+            message=""
+        fi
+    fi
+fi
+
+# Quote values for shell safety
+printf -v ws_q '%q' "$workspace"
+printf -v dir_q '%q' "$directory"
+printf -v agent_cmd_q '%q' "$agent_cmd"
+printf -v title_q '%q' "$title"
+
+# Spawn the AI terminal via hyprctl
+spawn_cmd="env TD_WORKSPACE=$ws_q TD_AI_CMD_STR=$agent_cmd_q TD_WINDOW_STATE_CMD=$(printf '%q' "$TD_WINDOW_STATE_CMD") TD_AGENT_RUN_CMD=$(printf '%q' "$TD_AGENT_RUN_CMD") uwsm-app -- alacritty --working-directory $dir_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" ai; \"\$TD_AGENT_RUN_CMD\" --workspace \"\$TD_WORKSPACE\" --command \"\$TD_AI_CMD_STR\"; exec \$SHELL'"
+
+hyprctl dispatch exec "$spawn_cmd"
+
+# If message was not embedded natively, warn that auto-send is not supported for this agent
+if [[ -n "$message" ]]; then
+    echo "td-spawn: warning: auto-send message not supported for agent '$agent_cmd'. Only opencode is supported." >&2
+fi
+
+exit 0

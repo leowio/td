@@ -1,0 +1,154 @@
+#!/bin/bash
+# td-opencode-fork - fork an opencode session into a new terminal window
+# Usage: td-opencode-fork [session_id] [opencode_args...]
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+TD_WINDOW_STATE_CMD="$SCRIPT_DIR/td-window-state"
+
+usage() {
+    echo "Usage: td-opencode-fork [session_id] [opencode_args...]"
+    echo ""
+    echo "Forks the given opencode session with 'opencode --session <id> --fork'"
+    echo "and opens it in a new Alacritty window. If no session_id is provided,"
+    echo "uses OPENCODE_SESSION_ID, then the active opencode window title/cwd,"
+    echo "then td's opencode runtime state, then the latest session for cwd."
+}
+
+sql_escape() {
+    local value="$1"
+    printf '%s' "${value//\'/\'\'}"
+}
+
+session_for_title() {
+    local title="$1"
+    local dir="$2"
+    local title_sql dir_sql session_id prefix prefix_sql
+
+    [[ -n "$title" && -n "$dir" ]] || return 0
+
+    title_sql=$(sql_escape "$title")
+    dir_sql=$(sql_escape "$dir")
+    session_id=$(opencode db "select id from session where directory = '$dir_sql' and title = '$title_sql' order by time_updated desc limit 1" --format json 2>/dev/null | jq -r '.[0].id // empty')
+    if [[ -n "$session_id" ]]; then
+        printf '%s\n' "$session_id"
+        return 0
+    fi
+
+    if [[ "$title" == *... ]]; then
+        prefix="${title%...}"
+        prefix_sql=$(sql_escape "$prefix")
+        opencode db "select id from session where directory = '$dir_sql' and title like '$prefix_sql%' order by time_updated desc limit 1" --format json 2>/dev/null | jq -r '.[0].id // empty'
+    fi
+}
+
+find_opencode_child() {
+    local root="$1"
+    local queue current children child comm
+
+    queue=("$root")
+    while ((${#queue[@]} > 0)); do
+        current="${queue[0]}"
+        queue=("${queue[@]:1}")
+        children=$(pgrep -P "$current" 2>/dev/null || true)
+        for child in $children; do
+            comm=$(ps -o comm= -p "$child" 2>/dev/null | tr -d '[:space:]')
+            if [[ "$comm" == "opencode" ]]; then
+                printf '%s\n' "$child"
+                return 0
+            fi
+            queue+=("$child")
+        done
+    done
+}
+
+active_window_session() {
+    local active_json active_pid active_title active_session_title opencode_pid active_dir
+
+    command -v hyprctl >/dev/null 2>&1 || return 0
+
+    active_json=$(hyprctl activewindow -j 2>/dev/null || true)
+    [[ -n "$active_json" ]] || return 0
+
+    active_pid=$(jq -r '.pid // empty' <<< "$active_json")
+    active_title=$(jq -r '.title // empty' <<< "$active_json")
+    [[ -n "$active_pid" && "$active_title" == "OC | "* ]] || return 0
+
+    opencode_pid=$(find_opencode_child "$active_pid")
+    [[ -n "$opencode_pid" ]] || return 0
+
+    active_dir=$(readlink "/proc/$opencode_pid/cwd" 2>/dev/null || true)
+    active_session_title="${active_title#OC | }"
+    session_for_title "$active_session_title" "$active_dir"
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+    exit 0
+fi
+
+if ! command -v opencode >/dev/null 2>&1; then
+    echo "td-opencode-fork: opencode not found in PATH" >&2
+    exit 1
+fi
+
+session_id="${1:-}"
+if [[ "$session_id" == ses_* ]]; then
+    shift
+else
+    session_id="${OPENCODE_SESSION_ID:-}"
+fi
+
+if [[ -z "$session_id" ]]; then
+    session_id=$(active_window_session)
+fi
+
+directory=""
+if command -v omarchy-cmd-terminal-cwd >/dev/null 2>&1; then
+    directory=$(omarchy-cmd-terminal-cwd || true)
+fi
+directory="${directory:-$PWD}"
+
+if [[ -z "$session_id" ]]; then
+    state_file=$(printf '%s' "$directory" | sha256sum | awk '{ print $1 }')
+    state_path="${XDG_RUNTIME_DIR:-/tmp}/td-opencode-session/$state_file"
+    if [[ -r "$state_path" ]]; then
+        read -r session_id < "$state_path" || true
+    fi
+fi
+
+if [[ -z "$session_id" ]]; then
+    session_id=$(opencode session list --format json --max-count 50 | jq -r --arg dir "$directory" '
+        [ .[] | select(.directory == $dir) ] | sort_by(.updated) | last | .id // empty
+    ')
+fi
+
+if [[ -z "$session_id" ]]; then
+    echo "td-opencode-fork: no session id provided and no recent session found for $directory" >&2
+    exit 1
+fi
+
+workspace=""
+if command -v hyprctl >/dev/null 2>&1; then
+    workspace=$(hyprctl activeworkspace -j 2>/dev/null | jq -r '.name // empty' || true)
+fi
+
+printf -v dir_q '%q' "$directory"
+printf -v sid_q '%q' "$session_id"
+printf -v window_state_q '%q' "$TD_WINDOW_STATE_CMD"
+
+opencode_cmd="opencode --session $sid_q --fork"
+if [[ $# -gt 0 ]]; then
+    for arg in "$@"; do
+        printf -v arg_q '%q' "$arg"
+        opencode_cmd+=" $arg_q"
+    done
+fi
+
+if [[ "$workspace" == td-* ]]; then
+    printf -v ws_q '%q' "$workspace"
+    exec hyprctl dispatch exec "env TD_WORKSPACE=$ws_q TD_WINDOW_STATE_CMD=$window_state_q uwsm-app -- alacritty --working-directory $dir_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" ai; exec $opencode_cmd'"
+fi
+
+exec uwsm-app -- alacritty --working-directory "$directory" -e sh -lc "exec $opencode_cmd"

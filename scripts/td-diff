@@ -1,0 +1,37 @@
+#!/bin/bash
+# td-diff - open an interactive branch diff terminal
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+TD_WINDOW_STATE_CMD="$SCRIPT_DIR/td-window-state"
+TD_DIFF_RUN_CMD="$SCRIPT_DIR/td-diff-run.ts"
+
+if [[ "${TD_DIFF_IN_TERMINAL:-}" == "1" ]]; then
+    exec "$TD_DIFF_RUN_CMD" "$@"
+fi
+
+cwd="$PWD"
+if command -v omarchy-cmd-terminal-cwd >/dev/null 2>&1; then
+    active_cwd=$(omarchy-cmd-terminal-cwd 2>/dev/null || true)
+    [[ -n "$active_cwd" ]] && cwd="$active_cwd"
+fi
+
+if ! command -v alacritty >/dev/null 2>&1; then
+    exec env TD_DIFF_IN_TERMINAL=1 "$TD_DIFF_RUN_CMD" "$@"
+fi
+
+ws=""
+if command -v hyprctl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+    ws=$(hyprctl activeworkspace -j 2>/dev/null | jq -r '.name // empty' 2>/dev/null || true)
+fi
+
+if [[ "$ws" == td-* ]]; then
+    exec env TD_WORKSPACE="$ws" TD_WINDOW_STATE_CMD="$TD_WINDOW_STATE_CMD" \
+        uwsm-app -- alacritty --working-directory "$cwd" \
+        -e env TD_DIFF_IN_TERMINAL=1 TD_WORKSPACE="$ws" TD_WINDOW_STATE_CMD="$TD_WINDOW_STATE_CMD" \
+        sh -lc '"$TD_WINDOW_STATE_CMD" register "$TD_WORKSPACE" term; "$0" "$@"; code=$?; printf "\ntd-diff exited with %s. Press enter to close..." "$code"; read _; exit "$code"' "$TD_DIFF_RUN_CMD" "$@"
+fi
+
+exec uwsm-app -- alacritty --working-directory "$cwd" \
+    -e env TD_DIFF_IN_TERMINAL=1 sh -lc '"$0" "$@"; code=$?; printf "\ntd-diff exited with %s. Press enter to close..." "$code"; read _; exit "$code"' "$TD_DIFF_RUN_CMD" "$@"

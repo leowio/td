@@ -27,9 +27,17 @@ td codex
 td-agent codex
 td-agent claude --dangerously-skip-permissions
 
+# Fork an opencode session into a new window
+td-opencode-fork ses_abc123
+# Or use /fork inside opencode after running ./install.sh and restarting opencode
+
 # Launch a tracked browser window in the current td workspace
 td-browser
 td-browser https://example.com
+
+# Open an interactive diff with a right-side preview pane
+td-diff
+td-diff develop
 
 # Open a git worktree branch
 td -w feature-branch
@@ -56,6 +64,8 @@ td also keeps lightweight runtime metadata for each spawned td window, so worksp
 | `td-agent` | Spawns another wrapped AI terminal in the current `td-*` workspace |
 | `td-agent-run` | PTY wrapper that tracks supported AI sessions and writes runtime state |
 | `td-browser` | Launches a new tracked browser window in the current `td-*` workspace |
+| `td-diff` | Opens an interactive terminal diff against a branch argument or `main` |
+| `td-opencode-fork` | Forks an opencode session into a new terminal window |
 | `td-window-state` | Internal runtime metadata helper for td window roles and workspaces |
 | `td-layout` | Spawns the 4 windows (editor, AI, 2 terminals) in dwindle layout |
 | `td-pick` | Fuzzy project switcher — lists active `td-*` workspaces via walker |
@@ -67,6 +77,8 @@ td also keeps lightweight runtime metadata for each spawned td window, so worksp
 - [Hyprland](https://hyprland.org/) (dwindle layout)
 - [Alacritty](https://alacritty.org/)
 - [walker](https://github.com/abenz1267/walker) (for `td-pick`)
+- [fzf](https://github.com/junegunn/fzf) (for the `td-diff` file picker)
+- [sem-cli](https://github.com/Ataraxy-Labs/sem) (optional, for semantic `td-diff` output)
 - `jq`
 - `$EDITOR` set to the terminal editor command you want to launch (defaults to `nvim`)
 - `$TD_AI_CMD` optionally set to the default AI command (defaults to `claude --dangerously-skip-permissions`)
@@ -79,4 +91,4 @@ cd td
 ./install.sh
 ```
 
-Symlinks all scripts to `~/.local/bin/`.
+Symlinks all scripts to `~/.local/bin/`, skills to `~/.agents/skills/`, and opencode integrations to `~/.config/opencode/`.

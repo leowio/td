@@ -38,6 +38,7 @@ td-browser https://example.com
 # Open an interactive diff with a right-side preview pane
 td-diff
 td-diff develop
+td-diff --direct develop
 
 # Open a git worktree branch
 td -w feature-branch

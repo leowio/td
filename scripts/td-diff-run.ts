@@ -16,6 +16,8 @@ const { values, positionals } = parseArgs({
   options: {
     base: { type: "string" },
     "base-ref": { type: "string" },
+    direct: { type: "boolean", default: false },
+    label: { type: "string" },
     path: { type: "string" },
     preview: { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
@@ -34,6 +36,7 @@ Arguments:
 
 Options:
   --base <branch>       Alias for the branch argument
+  --direct              Compare directly against the base branch tip instead of the merge base
 
 Keys:
   enter                 Pick a file from fzf
@@ -112,6 +115,10 @@ function resolveBaseRef(requested: string) {
   }
 
   throw new Error(`Remote base branch '${requested}' was not found or could not be fetched.`);
+}
+
+function mergeBase(baseRef: string) {
+  return git(["merge-base", baseRef, "HEAD"]).stdout.trim();
 }
 
 function changedFiles(baseRef: string): Change[] {
@@ -244,8 +251,8 @@ async function pageText(text: string) {
   }
 }
 
-async function showAll(baseRef: string) {
-  await pageText(allSummary(baseRef));
+async function showAll(baseRef: string, label?: string) {
+  await pageText(allSummary(baseRef, label));
 }
 
 async function showSelected(changes: Change[]) {
@@ -259,14 +266,14 @@ async function showSelected(changes: Change[]) {
   ].join("\n"));
 }
 
-function allSummary(baseRef: string) {
+function allSummary(baseRef: string, label = `${baseRef}..worktree`) {
   const files = changedFiles(baseRef);
   const counts = new Map<string, number>();
   for (const change of files) {
     const key = change.status[0] ?? "?";
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
-  const label = (key: string) =>
+  const statusLabel = (key: string) =>
     ({
       A: "added",
       C: "copied",
@@ -280,10 +287,10 @@ function allSummary(baseRef: string) {
     })[key] ?? key;
 
   const lines = [
-    `td-diff summary for ${baseRef}..worktree`,
+    `td-diff summary for ${label}`,
     "",
     `Files changed: ${files.length}`,
-    ...[...counts.entries()].map(([key, count]) => `${label(key)}: ${count}`),
+    ...[...counts.entries()].map(([key, count]) => `${statusLabel(key)}: ${count}`),
     "",
     ...files.map(
       (change) =>
@@ -291,6 +298,11 @@ function allSummary(baseRef: string) {
     ),
   ];
   return lines.join("\n");
+}
+
+function compareLabel(baseRef: string, compareRef: string, direct: boolean) {
+  if (direct) return `${baseRef}..worktree`;
+  return `${baseRef}...worktree | merge-base: ${compareRef}`;
 }
 
 function cleanSemOutput(output: string, change: Change, before: string, after: string) {
@@ -355,9 +367,9 @@ async function showFile(baseRef: string, change: Change) {
   await pageOutput(["git", "diff", "--color=always", baseRef, "--", oldPath, change.path]);
 }
 
-async function previewFile(baseRef: string, filePath: string) {
+async function previewFile(baseRef: string, filePath: string, label?: string) {
   if (filePath === "__ALL__") {
-    console.log(allSummary(baseRef));
+    console.log(allSummary(baseRef, label));
     return;
   }
 
@@ -469,11 +481,11 @@ function pickerInput(files: Change[]) {
     .join("\n");
 }
 
-async function pickWithFzf(files: Change[], baseRef: string) {
+async function pickWithFzf(files: Change[], baseRef: string, label: string) {
   const bun = Bun.argv[0] ?? "bun";
   const script = Bun.argv[1] ?? "td-diff-run.ts";
   const ancestor = commonAncestor(files.map((file) => file.path));
-  const preview = `path=$(printf '%s' {} | cut -f2); ${quote(bun)} ${quote(script)} --preview --base-ref ${quote(baseRef)} --path "$path"`;
+  const preview = `path=$(printf '%s' {} | cut -f2); ${quote(bun)} ${quote(script)} --preview --base-ref ${quote(baseRef)} --label ${quote(label)} --path "$path"`;
   const clipboard = clipboardSinkCommand();
   const args = [
     "fzf",
@@ -501,7 +513,7 @@ async function pickWithFzf(files: Change[], baseRef: string) {
     "--accept-nth",
     "2",
     "--header",
-    `td-diff ${baseRef}..worktree | root: ${ancestor} | tab: select | ctrl-y: copy paths | enter: view | alt-a/m/d/r: mode | ?: preview | esc: quit`,
+    `td-diff ${label} | root: ${ancestor} | tab: select | ctrl-y: copy paths | enter: view | alt-a/m/d/r: mode | ?: preview | esc: quit`,
     "--preview",
     preview,
     "--preview-window",
@@ -572,38 +584,41 @@ async function main() {
   const requestedBase =
     values.base ?? branchArg ?? "main";
   const baseRef = values["base-ref"] ?? resolveBaseRef(requestedBase);
+  const direct = values.direct === true;
+  const compareRef = values["base-ref"] ? baseRef : direct ? baseRef : mergeBase(baseRef);
+  const label = values.label ?? compareLabel(baseRef, compareRef, direct);
 
   if (values.preview && values.path) {
-    await previewFile(baseRef, values.path);
+    await previewFile(compareRef, values.path, label);
     return;
   }
 
-  const files = changedFiles(baseRef);
+  const files = changedFiles(compareRef);
   if (files.length === 0) {
-    console.log(`No changes against ${baseRef}.`);
+    console.log(`No changes against ${label}.`);
     return;
   }
 
   while (true) {
     console.clear();
-    console.log(`td-diff: ${baseRef}..worktree (${files.length} files)`);
+    console.log(`td-diff: ${label} (${files.length} files)`);
     console.log(
       semCommand() ? "renderer: sem" : "renderer: git diff (install sem for semantic diffs)",
     );
     console.log("");
 
     if (has("fzf")) {
-      const selected = await pickWithFzf(files, baseRef);
+      const selected = await pickWithFzf(files, compareRef, label);
       if (!selected) break;
       if (selected.includes("__ALL__")) {
-        await showAll(baseRef);
+        await showAll(compareRef, label);
         continue;
       }
       const changes = selected
         .map((path) => files.find((item) => item.path === path))
         .filter((change): change is Change => Boolean(change));
       const [change] = changes;
-      if (changes.length === 1 && change) await showFile(baseRef, change);
+      if (changes.length === 1 && change) await showFile(compareRef, change);
       if (changes.length > 1) await showSelected(changes);
       continue;
     }
@@ -611,11 +626,11 @@ async function main() {
     const selected = await pickNumbered(files);
     if (!selected) break;
     if (selected === "__ALL__") {
-      await showAll(baseRef);
+      await showAll(compareRef, label);
       continue;
     }
     const change = files.find((item) => item.path === selected);
-    if (change) await showFile(baseRef, change);
+    if (change) await showFile(compareRef, change);
   }
 }
 

@@ -2,6 +2,7 @@
 # td - Unified tmux dev session launcher
 # Usage:
 #   td [ai_args...]                    - Open current directory
+#   td [ai_args...] -- <cmd...>        - Run commands in terminal panes
 #   td --worktree <branch> [ai_args]   - Open git worktree for branch
 #   td -w <branch> [ai_args]           - Short form for --worktree
 #   td --clone <name> [ai_args]        - Clone repo to ../<name> and open
@@ -15,18 +16,48 @@ get_project_name() {
     basename "$dir" | tr '.:/ ' '----'
 }
 
+quote_args() {
+    local out=""
+    local arg q
+    for arg in "$@"; do
+        printf -v q '%q' "$arg"
+        out+=" $q"
+    done
+    printf '%s' "${out# }"
+}
+
 # Main td workflow: open directory with optional AI command
 td_open() {
     local dir="$1"
     shift
-    local ai_cmd="$*"
+    local ai_args=()
+    local term_cmds=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --)
+                shift
+                term_cmds+=("$@")
+                break
+                ;;
+            *)
+                ai_args+=("$1")
+                ;;
+        esac
+        shift
+    done
+
+    local ai_cmd="${ai_args[*]}"
     
     [[ -z "$ai_cmd" ]] && ai_cmd="${TD_AI_CMD:-claude --dangerously-skip-permissions}"
     
     local project
     project=$(get_project_name "$dir")
-    
-    hyprctl dispatch exec "td-layout 'td-$project' '$dir' '$ai_cmd'"
+
+    local layout_cmd
+    layout_cmd=$(quote_args td-layout "td-$project" "$dir" "$ai_cmd" "${term_cmds[@]}")
+
+    hyprctl dispatch exec "$layout_cmd"
 }
 
 # tdg workflow: git worktree + td
@@ -41,13 +72,32 @@ tdg_open() {
     }
     
     local worktree_dir="$repo_root/../$branch"
+    local remote_branch_exists=false
+
+    if git remote get-url origin >/dev/null 2>&1 && git fetch --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null; then
+        remote_branch_exists=true
+    fi
     
     if [[ -d "$worktree_dir" ]]; then
         echo "Worktree already exists at $worktree_dir, using it."
+        if [[ "$remote_branch_exists" == true ]]; then
+            local current_branch
+            current_branch=$(git -C "$worktree_dir" branch --show-current)
+            if [[ "$current_branch" == "$branch" ]]; then
+                git -C "$worktree_dir" merge --ff-only "origin/$branch"
+            else
+                echo "Worktree is on '$current_branch', not '$branch'; leaving it unchanged."
+            fi
+        fi
     else
-        if git show-ref --verify --quiet "refs/heads/$branch"; then
-            git worktree add "$worktree_dir" "$branch"
-        elif git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+        if [[ "$remote_branch_exists" == true ]]; then
+            if git show-ref --verify --quiet "refs/heads/$branch"; then
+                git worktree add "$worktree_dir" "$branch"
+                git -C "$worktree_dir" merge --ff-only "origin/$branch"
+            else
+                git worktree add -b "$branch" "$worktree_dir" "origin/$branch"
+            fi
+        elif git show-ref --verify --quiet "refs/heads/$branch"; then
             git worktree add "$worktree_dir" "$branch"
         else
             echo "Branch '$branch' not found locally or on origin. Creating new branch."
@@ -108,6 +158,8 @@ usage() {
     echo "Examples:"
     echo "  td                        Open current directory"
     echo "  td kimi                   Open current directory with 'kimi' as AI command"
+    echo "  td -- 'npm run dev'       Open and run a command in a terminal pane"
+    echo "  td codex -- 'npm run dev' 'bun test'"
     echo "  td -w feature-branch      Open worktree for feature-branch"
     echo "  td --worktree foo codex   Open worktree for 'foo' with 'codex' as AI"
     echo "  td -c my-clone            Clone repo to ../my-clone and open"
@@ -149,7 +201,6 @@ main() {
                 return 0
                 ;;
             --)
-                shift
                 break
                 ;;
             -*)

@@ -23,6 +23,10 @@ td
 td kimi
 td codex
 
+# Run commands in terminal panes, adding panes when needed
+td -- "npm run dev" "bun test"
+td codex -- "npm run dev" "bun test" "tail -f app.log"
+
 # Launch another wrapped agent in the current td workspace
 td-agent codex
 td-agent claude --dangerously-skip-permissions
@@ -68,7 +72,7 @@ td also keeps lightweight runtime metadata for each spawned td window, so worksp
 | `td-diff` | Opens an interactive terminal diff against a branch argument or `main` |
 | `td-opencode-fork` | Forks an opencode session into a new terminal window |
 | `td-window-state` | Internal runtime metadata helper for td window roles and workspaces |
-| `td-layout` | Spawns the 4 windows (editor, AI, 2 terminals) in dwindle layout |
+| `td-layout` | Spawns the workspace windows and runs optional terminal commands |
 | `td-pick` | Fuzzy project switcher — lists active `td-*` workspaces via walker |
 | `td-reset-layout` | Resets a messy workspace back to the 3-column layout |
 | `td-terminal` | Spawns a new terminal that auto-joins the current td workspace |

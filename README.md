@@ -33,7 +33,6 @@ td-agent claude --dangerously-skip-permissions
 
 # Fork an opencode session into a new window
 td-opencode-fork ses_abc123
-# Or use /fork inside opencode after running ./install.sh and restarting opencode
 
 # Launch a tracked browser window in the current td workspace
 td-browser
@@ -96,4 +95,4 @@ cd td
 ./install.sh
 ```
 
-Symlinks all scripts to `~/.local/bin/`, skills to `~/.agents/skills/`, and opencode integrations to `~/.config/opencode/`.
+Symlinks all scripts to `~/.local/bin/` and skills to `~/.agents/skills/`.

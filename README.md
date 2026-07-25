@@ -38,8 +38,9 @@ td-opencode-fork ses_abc123
 td-browser
 td-browser https://example.com
 
-# Open an interactive diff with a right-side preview pane
+# Open an interactive diff against the remote default branch
 td-diff
+# Or choose a base branch explicitly
 td-diff develop
 td-diff --direct develop
 

@@ -32,7 +32,7 @@ if (values.help) {
   console.log(`Usage: td-diff [branch]
 
 Arguments:
-  branch                Base branch to compare against (defaults to main)
+  branch                Base branch to compare against (defaults to the remote default branch)
 
 Options:
   --base <branch>       Alias for the branch argument
@@ -79,18 +79,29 @@ function remoteNames() {
   return git(["remote"], true).stdout.split("\n").filter(Boolean);
 }
 
-function remoteBranchCandidates(requested: string) {
+function remoteDefaultBranch(remote: string) {
+  const ref = git(["symbolic-ref", "--quiet", "--short", `refs/remotes/${remote}/HEAD`], true)
+    .stdout.trim();
+  const prefix = `${remote}/`;
+  return ref.startsWith(prefix) ? ref.slice(prefix.length) : undefined;
+}
+
+function remoteBranchCandidates(requested?: string) {
   const remotes = remoteNames();
   if (remotes.length === 0) throw new Error("No git remotes are configured.");
 
-  const parts = requested.split("/");
+  const parts = requested?.split("/") ?? [];
   const first = parts[0] ?? "";
-  const explicitRemote = remotes.includes(first) && parts.length > 1;
+  const explicitRemote = Boolean(requested) && remotes.includes(first) && parts.length > 1;
   const fallbackRemote = remotes[0];
   if (!fallbackRemote) throw new Error("No git remotes are configured.");
   const remote = explicitRemote ? first : remotes.includes("origin") ? "origin" : fallbackRemote;
-  const branch = explicitRemote ? parts.slice(1).join("/") : requested;
-  const branches = branch === "main" ? ["main", "master"] : [branch];
+  const branch = requested
+    ? explicitRemote
+      ? parts.slice(1).join("/")
+      : requested
+    : remoteDefaultBranch(remote);
+  const branches = branch ? (branch === "main" ? ["main", "master"] : [branch]) : ["main", "master"];
 
   return branches.map((candidate) => ({ remote, branch: candidate }));
 }
@@ -102,7 +113,7 @@ function fetchRemoteBranch(remote: string, branch: string) {
   );
 }
 
-function resolveBaseRef(requested: string) {
+function resolveBaseRef(requested?: string) {
   for (const candidate of remoteBranchCandidates(requested)) {
     const ref = `${candidate.remote}/${candidate.branch}`;
     const fetched = fetchRemoteBranch(candidate.remote, candidate.branch);
@@ -114,7 +125,9 @@ function resolveBaseRef(requested: string) {
     }
   }
 
-  throw new Error(`Remote base branch '${requested}' was not found or could not be fetched.`);
+  throw new Error(
+    `Remote default branch${requested ? ` '${requested}'` : ""} was not found or could not be fetched.`,
+  );
 }
 
 function mergeBase(baseRef: string) {
@@ -581,8 +594,7 @@ async function main() {
     process.exit(1);
   }
 
-  const requestedBase =
-    values.base ?? branchArg ?? "main";
+  const requestedBase = values.base ?? branchArg;
   const baseRef = values["base-ref"] ?? resolveBaseRef(requestedBase);
   const direct = values.direct === true;
   const compareRef = values["base-ref"] ? baseRef : direct ? baseRef : mergeBase(baseRef);

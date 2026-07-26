@@ -69,7 +69,7 @@ td also keeps lightweight runtime metadata for each spawned td window, so worksp
 | `td-agent` | Spawns another wrapped AI terminal in the current `td-*` workspace |
 | `td-agent-run` | PTY wrapper that tracks supported AI sessions and writes runtime state |
 | `td-browser` | Launches a new tracked browser window in the current `td-*` workspace |
-| `td-diff` | Opens an interactive terminal diff against a branch argument or `main` |
+| `td-diff` | Opens an interactive file, commit, and patch browser against a branch or remote default branch |
 | `td-opencode-fork` | Forks an opencode session into a new terminal window |
 | `td-window-state` | Internal runtime metadata helper for td window roles and workspaces |
 | `td-layout` | Spawns the workspace windows and runs optional terminal commands |
@@ -82,11 +82,13 @@ td also keeps lightweight runtime metadata for each spawned td window, so worksp
 - [Hyprland](https://hyprland.org/) (dwindle layout)
 - [Alacritty](https://alacritty.org/)
 - [walker](https://github.com/abenz1267/walker) (for `td-pick`)
-- [fzf](https://github.com/junegunn/fzf) (for the `td-diff` file picker)
-- [sem-cli](https://github.com/Ataraxy-Labs/sem) (optional, for semantic `td-diff` output)
+- [fzf](https://github.com/junegunn/fzf) (for `td-diff` fuzzy filtering)
+- [sem-cli](https://github.com/Ataraxy-Labs/sem) (optional, for semantic `td-diff` patches)
 - `jq`
 - `$EDITOR` set to the terminal editor command you want to launch (defaults to `nvim`)
 - `$TD_AI_CMD` optionally set to the default AI command (defaults to `claude --dangerously-skip-permissions`)
+
+`td-diff` starts with a file-and-diff view. Press `Alt-G` to show commits ahead of the base branch, use `Tab` to select commits or files, and type in either list to filter with fzf query syntax. The diff pane shows the exact patches for the selected commits and files.
 
 ## Install
 

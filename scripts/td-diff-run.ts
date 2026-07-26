@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { basename, dirname, join, relative } from "path";
 import { tmpdir } from "os";
 import { parseArgs } from "util";
+import { runDiffTui } from "./td-diff-tui.ts";
 
 type Change = {
   status: string;
@@ -39,12 +40,13 @@ Options:
   --direct              Compare directly against the base branch tip instead of the merge base
 
 Keys:
-  enter                 Pick a file from fzf
-  tab/shift-tab         Select multiple files in fzf
-  ctrl-y                Copy selected file paths from fzf
-  alt-a/m/d/r/c/t/u      Filter by change mode in fzf
-  alt-x                 Clear the fzf filter
-  ctrl-c/esc            Exit picker or pager
+  alt-g                 Toggle the commit sidebar
+  alt-left/right        Move between panes
+  up/down, ctrl-p/n     Navigate the focused pane
+  tab/shift-tab         Toggle selection and move
+  ctrl-u, ctrl-w        Clear or delete the focused pane's fzf query
+  ctrl-y                Copy selected file paths
+  ctrl-c/esc            Exit
 `);
   process.exit(0);
 }
@@ -605,45 +607,7 @@ async function main() {
     return;
   }
 
-  const files = changedFiles(compareRef);
-  if (files.length === 0) {
-    console.log(`No changes against ${label}.`);
-    return;
-  }
-
-  while (true) {
-    console.clear();
-    console.log(`td-diff: ${label} (${files.length} files)`);
-    console.log(
-      semCommand() ? "renderer: sem" : "renderer: git diff (install sem for semantic diffs)",
-    );
-    console.log("");
-
-    if (has("fzf")) {
-      const selected = await pickWithFzf(files, compareRef, label);
-      if (!selected) break;
-      if (selected.includes("__ALL__")) {
-        await showAll(compareRef, label);
-        continue;
-      }
-      const changes = selected
-        .map((path) => files.find((item) => item.path === path))
-        .filter((change): change is Change => Boolean(change));
-      const [change] = changes;
-      if (changes.length === 1 && change) await showFile(compareRef, change);
-      if (changes.length > 1) await showSelected(changes);
-      continue;
-    }
-
-    const selected = await pickNumbered(files);
-    if (!selected) break;
-    if (selected === "__ALL__") {
-      await showAll(compareRef, label);
-      continue;
-    }
-    const change = files.find((item) => item.path === selected);
-    if (change) await showFile(compareRef, change);
-  }
+  await runDiffTui({ compareRef, label });
 }
 
 main().catch((error) => {

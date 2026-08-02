@@ -101,6 +101,26 @@ export function changesByCommit(baseRef: string) {
 }
 
 let resolvedSemCommand: string | undefined | null;
+let resolvedBatCommand: string | undefined | null;
+
+function batCommand() {
+  if (resolvedBatCommand !== undefined) return resolvedBatCommand ?? undefined;
+  resolvedBatCommand = tryRun(["sh", "-lc", "command -v bat"])
+    ? "bat"
+    : tryRun(["sh", "-lc", "command -v batcat"])
+      ? "batcat"
+      : null;
+  return resolvedBatCommand ?? undefined;
+}
+
+function fullFileDiff(status: "ADDED" | "DELETED", path: string, content: string) {
+  const bat = batCommand();
+  const highlighted = bat
+    ? tryRun([bat, "--color=always", "--style=plain", "--paging=never", "--theme=ansi", "--file-name", path, "-"], content) || content
+    : content;
+  const color = status === "ADDED" ? 92 : 91;
+  return `\x1b[${color}m${status}\x1b[0m  ${path}\n\n${highlighted}`;
+}
 
 function semCommand() {
   if (resolvedSemCommand !== undefined) return resolvedSemCommand ?? undefined;
@@ -165,6 +185,17 @@ function semanticWorkingDiff(compareRef: string, change: Change) {
 }
 
 export function changeDiff(compareRef: string, change: Change) {
+  if (change.status[0] === "A") {
+    try {
+      return fullFileDiff("ADDED", change.path, readFileSync(change.path, "utf8"));
+    } catch {
+      return `Unable to read added file ${change.path}.`;
+    }
+  }
+  if (change.status[0] === "D") {
+    const path = change.oldPath ?? change.path;
+    return fullFileDiff("DELETED", path, tryRun(["git", "show", `${compareRef}:${path}`]));
+  }
   const semantic = semanticWorkingDiff(compareRef, change);
   if (semantic) return semantic;
   const diff = tryRun(["git", "diff", "--no-ext-diff", "--color=always", compareRef, "--", change.path]);
@@ -172,6 +203,13 @@ export function changeDiff(compareRef: string, change: Change) {
 }
 
 export function commitDiff(hash: string, change: Change) {
+  if (change.status[0] === "A") {
+    return fullFileDiff("ADDED", change.path, tryRun(["git", "show", `${hash}:${change.path}`]));
+  }
+  if (change.status[0] === "D") {
+    const path = change.oldPath ?? change.path;
+    return fullFileDiff("DELETED", path, tryRun(["git", "show", `${hash}^:${path}`]));
+  }
   const semantic = semanticDiff(`${hash}^`, change.oldPath ?? change.path, hash, change.path);
   return semantic || tryRun(["git", "show", "--format=fuller", "--color=always", hash, "--", change.path]);
 }

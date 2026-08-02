@@ -28,10 +28,12 @@ Normal mode:
   c / f / d             Toggle commits, files, or diff pane
   h / l                 Focus the pane to the left or right
   j / k                 Navigate the focused pane
+  mouse wheel           Move the pointer in the commit or file pane
+  left click            Focus the commit or file pane and select a row
   /                     Start an fzf query for the focused list
   tab / shift-tab       Toggle selection and move
   enter                 Collapse or expand a folder
-  ctrl-c                Clear selection
+  ctrl-c                Copy selected diff text, otherwise clear selection
   ctrl-y                Copy selected file paths
   q                     Exit
 
@@ -39,7 +41,7 @@ Query mode:
   enter                 Apply query
   escape                Cancel query and restore the previous query
   tab / shift-tab       Toggle selection and move
-  ctrl-c                Clear selection
+  ctrl-c                Copy selected diff text, otherwise clear selection
 `);
   process.exit(0);
 }

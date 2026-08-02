@@ -83,6 +83,7 @@ td also keeps lightweight runtime metadata for each spawned td window, so worksp
 - [Alacritty](https://alacritty.org/)
 - [walker](https://github.com/abenz1267/walker) (for `td-pick`)
 - [fzf](https://github.com/junegunn/fzf) (for `td-diff` fuzzy filtering)
+- [bat](https://github.com/sharkdp/bat) (optional, for syntax-highlighting added and deleted files in `td-diff`)
 - [sem-cli](https://github.com/Ataraxy-Labs/sem) (optional, for semantic `td-diff` patches)
 - `jq`
 - `$EDITOR` set to the terminal editor command you want to launch (defaults to `nvim`)

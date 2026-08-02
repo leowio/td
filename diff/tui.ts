@@ -1,4 +1,4 @@
-import { BoxRenderable, createCliRenderer, TextRenderable } from "@opentui/core";
+import { BoxRenderable, createCliRenderer, TextRenderable, type MouseEvent } from "@opentui/core";
 import {
   changeDiff,
   changesByCommit,
@@ -15,6 +15,8 @@ import { fileTreeRows, filterEntries, type Entry, type FileTreeRow } from "./tre
 
 type Pane = "commits" | "files" | "diff";
 type InputMode = "normal" | "query";
+
+const MAX_DISPLAY_DIFF_BYTES = 2 * 1024 * 1024;
 
 type DiffRequest = {
   key: string;
@@ -83,8 +85,8 @@ export async function runDiffTui({ compareRef, label }: DiffTuiOptions) {
     title: " [d] Diff ",
     borderColor: "#4b5563",
   });
-  const commitsText = new TextRenderable(renderer, { wrapMode: "none", truncate: true, flexGrow: 1 });
-  const filesText = new TextRenderable(renderer, { wrapMode: "none", truncate: true, flexGrow: 1 });
+  const commitsText = new TextRenderable(renderer, { wrapMode: "none", truncate: true, flexGrow: 1, selectable: false });
+  const filesText = new TextRenderable(renderer, { wrapMode: "none", truncate: true, flexGrow: 1, selectable: false });
   const diffText = new TextRenderable(renderer, { wrapMode: "none", flexGrow: 1, fg: "#d1d5db" });
   const footer = new TextRenderable(renderer, { height: 2, fg: "#94a3b8" });
 
@@ -231,7 +233,11 @@ export async function runDiffTui({ compareRef, label }: DiffTuiOptions) {
     if (!displayedDiffKey) diffText.content = "Waiting for selection…";
     diffTimer = setTimeout(() => {
       diffTimer = undefined;
-      const output = renderDiff(request);
+      const rendered = renderDiff(request);
+      const size = Buffer.byteLength(rendered);
+      const output = size > MAX_DISPLAY_DIFF_BYTES
+        ? `Error: Diff is too large to display (${(size / 1024 / 1024).toFixed(1)} MiB; limit 2 MiB). Narrow the file or commit selection.`
+        : rendered;
       diffOutputCache.set(request.key, output);
       if (generation !== diffGeneration) return;
       diffText.content = ansiToStyledText(output);
@@ -279,8 +285,8 @@ export async function runDiffTui({ compareRef, label }: DiffTuiOptions) {
     filesText.scrollY = Math.max(0, fileIndex - Math.max(1, filesText.height - 2));
     diffText.scrollY = diffScroll;
     footer.content = mode === "query"
-      ? `QUERY  type to filter  Enter apply  Esc cancel  Tab select  Ctrl-C clear selection\n/${activeQuery}`
-      : `NORMAL  c/f/d panes  h/l focus  j/k move  / query  Tab select  Ctrl-C clear  q quit\n${status || "Enter toggles folders  Ctrl-Y copies selected paths"}`;
+      ? `QUERY  type to filter  Enter apply  Esc cancel  Tab select  Ctrl-C copy text/clear\n/${activeQuery}`
+      : `NORMAL  c/f/d panes  h/l focus  j/k move  / query  Tab select  Ctrl-C copy text/clear  q quit\n${status || "Enter toggles folders  Ctrl-Y copies selected paths"}`;
     if (paneVisible.diff) scheduleDiff(diffRequestFor(fileRows, changes));
     renderer.root.requestRender();
   }
@@ -390,9 +396,48 @@ export async function runDiffTui({ compareRef, label }: DiffTuiOptions) {
     else fileIndex = 0;
   }
 
+  function mouseScroll(pane: "commits" | "files", event: MouseEvent) {
+    const direction = event.scroll?.direction;
+    if (direction !== "up" && direction !== "down") return;
+    focus = pane;
+    move(direction === "up" ? -1 : 1);
+    event.preventDefault();
+    event.stopPropagation();
+    render();
+  }
+
+  commitsBox.onMouseScroll = (event) => mouseScroll("commits", event);
+  filesBox.onMouseScroll = (event) => mouseScroll("files", event);
+
+  commitsBox.onMouseDown = (event) => {
+    if (event.button !== 0) return;
+    const index = Math.floor(event.y - commitsText.screenY + commitsText.scrollY);
+    focus = "commits";
+    if (index >= 0 && index < visibleCommits().length) commitIndex = index;
+    event.preventDefault();
+    event.stopPropagation();
+    render();
+  };
+
+  filesBox.onMouseDown = (event) => {
+    if (event.button !== 0) return;
+    const index = Math.floor(event.y - filesText.screenY + filesText.scrollY);
+    focus = "files";
+    if (index >= 0 && index < visibleFiles().length) fileIndex = index;
+    event.preventDefault();
+    event.stopPropagation();
+    render();
+  };
+
   body.onKeyDown = (key) => {
     if (key.ctrl && key.name === "c") {
-      clearSelection();
+      const text = renderer.getSelection()?.getSelectedText() ?? "";
+      if (text) {
+        status = copyToClipboard(text) ? "Copied selected text." : "Clipboard command unavailable.";
+        renderer.clearSelection();
+      } else {
+        clearSelection();
+      }
       render();
       return;
     }

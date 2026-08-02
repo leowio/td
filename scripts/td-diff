@@ -5,7 +5,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 TD_WINDOW_STATE_CMD="$SCRIPT_DIR/td-window-state"
-TD_DIFF_RUN_CMD="$SCRIPT_DIR/td-diff-run.ts"
+TD_DIFF_RUN_CMD="$SCRIPT_DIR/../diff.ts"
 
 if [[ "${TD_DIFF_IN_TERMINAL:-}" == "1" ]]; then
     exec "$TD_DIFF_RUN_CMD" "$@"

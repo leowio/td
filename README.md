@@ -88,7 +88,7 @@ td also keeps lightweight runtime metadata for each spawned td window, so worksp
 - `$EDITOR` set to the terminal editor command you want to launch (defaults to `nvim`)
 - `$TD_AI_CMD` optionally set to the default AI command (defaults to `claude --dangerously-skip-permissions`)
 
-`td-diff` starts with a file-and-diff view. Press `Alt-G` to show commits ahead of the base branch, use `Tab` to select commits or files, and type in either list to filter with fzf query syntax. The diff pane shows the exact patches for the selected commits and files.
+`td-diff` uses Vim-style normal and query modes. In normal mode, `c`, `f`, and `d` toggle the commit, file-tree, and diff panes; `h`/`l` move pane focus; `j`/`k` navigate; `/` starts an fzf query; and `q` exits. Press `Enter` on a folder to collapse or expand it. `Tab` selects the current commit or file, and on a folder selects every changed file below it. `Ctrl-C` clears the focused selection. In query mode, `Enter` applies the query and `Esc` restores the previous query. Patch rendering is debounced and cached so navigating quickly does not run Git or sem for every file under the cursor.
 
 ## Install
 

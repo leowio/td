@@ -9,8 +9,19 @@ mkdir -p "$BIN"
 shopt -s nullglob
 for f in "$DIR"/scripts/*; do
     [[ -f "$f" ]] || continue
+    [[ "$f" == *.json ]] && continue
     chmod +x "$f"
     ln -sf "$f" "$BIN/$(basename "$f")"
+done
+
+chmod +x "$DIR/diff.ts"
+
+# Remove helper links created by older td-diff layouts.
+for name in td-diff-run.ts td-diff-tui.ts td-diff-git.ts td-diff-style.ts td-diff-tree.ts tsconfig.json; do
+    target="$BIN/$name"
+    if [[ -L "$target" && "$(readlink -f "$target")" == "$DIR/scripts/$name" ]]; then
+        unlink "$target"
+    fi
 done
 
 # Install skills to ~/.agents/skills

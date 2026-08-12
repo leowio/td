@@ -1,11 +1,12 @@
 #!/bin/bash
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 TD_WINDOW_STATE_CMD="$SCRIPT_DIR/td-window-state"
+TD_RESOURCE_RUN_CMD="$SCRIPT_DIR/td-resource-run"
 
 ws=$(hyprctl activeworkspace -j | jq -r '.name')
 if [[ "$ws" == td-* ]]; then
     cwd=$(omarchy-cmd-terminal-cwd)
-    exec env TD_WORKSPACE="$ws" TD_WINDOW_STATE_CMD="$TD_WINDOW_STATE_CMD" uwsm-app -- alacritty --working-directory "${cwd:-$HOME}" -e sh -lc '"$TD_WINDOW_STATE_CMD" register "$TD_WORKSPACE" term; exec $SHELL'
+    exec env TD_WORKSPACE="$ws" TD_WINDOW_STATE_CMD="$TD_WINDOW_STATE_CMD" uwsm-app -- "$TD_RESOURCE_RUN_CMD" "$ws" -- alacritty --working-directory "${cwd:-$HOME}" -e sh -lc '"$TD_WINDOW_STATE_CMD" register "$TD_WORKSPACE" term; exec $SHELL'
 else
     exec uwsm-app -- xdg-terminal-exec --dir="$(omarchy-cmd-terminal-cwd)"
 fi

@@ -6,11 +6,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 TD_WINDOW_STATE_CMD="$SCRIPT_DIR/td-window-state"
+TD_RESOURCE_RUN_CMD="$SCRIPT_DIR/td-resource-run"
+TD_OPENCODE_SERVER_CMD="$SCRIPT_DIR/td-opencode-server"
 
 usage() {
     echo "Usage: td-opencode-fork [session_id] [opencode_args...]"
     echo ""
-    echo "Forks the given opencode session with 'opencode --session <id> --fork'"
+    echo "Forks the given opencode session and attaches a new window to the fork."
     echo "and opens it in a new Alacritty window. If no session_id is provided,"
     echo "uses OPENCODE_SESSION_ID, then the active opencode window title/cwd,"
     echo "then td's opencode runtime state, then the latest session for cwd."
@@ -137,8 +139,26 @@ fi
 printf -v dir_q '%q' "$directory"
 printf -v sid_q '%q' "$session_id"
 printf -v window_state_q '%q' "$TD_WINDOW_STATE_CMD"
+printf -v resource_run_q '%q' "$TD_RESOURCE_RUN_CMD"
 
-opencode_cmd="opencode --session $sid_q --fork"
+if [[ "$workspace" == td-* ]]; then
+    endpoint=$("$TD_OPENCODE_SERVER_CMD" ensure "$directory" "$workspace")
+    printf -v endpoint_q '%q' "$endpoint"
+    directory_query=$(jq -rn --arg value "$directory" '$value | @uri')
+    forked_session=$(curl --silent --show-error --fail \
+        --request POST \
+        --header "content-type: application/json" \
+        --data '{}' \
+        "$endpoint/session/$session_id/fork?directory=$directory_query" | jq -r '.id // empty')
+    if [[ -z "$forked_session" ]]; then
+        echo "td-opencode-fork: server did not return a forked session id" >&2
+        exit 1
+    fi
+    printf -v forked_sid_q '%q' "$forked_session"
+    opencode_cmd="opencode attach $endpoint_q --dir $dir_q --session $forked_sid_q"
+else
+    opencode_cmd="opencode --session $sid_q --fork"
+fi
 if [[ $# -gt 0 ]]; then
     for arg in "$@"; do
         printf -v arg_q '%q' "$arg"
@@ -148,7 +168,7 @@ fi
 
 if [[ "$workspace" == td-* ]]; then
     printf -v ws_q '%q' "$workspace"
-    exec hyprctl dispatch exec "env TD_WORKSPACE=$ws_q TD_WINDOW_STATE_CMD=$window_state_q uwsm-app -- alacritty --working-directory $dir_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" ai; exec $opencode_cmd'"
+    exec hyprctl dispatch exec "env TD_WORKSPACE=$ws_q TD_WINDOW_STATE_CMD=$window_state_q uwsm-app -- $resource_run_q $ws_q -- alacritty --working-directory $dir_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" ai; exec $opencode_cmd'"
 fi
 
 exec uwsm-app -- alacritty --working-directory "$directory" -e sh -lc "exec $opencode_cmd"

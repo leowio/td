@@ -4,7 +4,8 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 TD_WINDOW_STATE_CMD="$SCRIPT_DIR/td-window-state"
-TD_AGENT_RUN_CMD="$SCRIPT_DIR/td-agent-run.ts"
+TD_AGENT_COMMAND_CMD="$SCRIPT_DIR/td-agent-command"
+TD_RESOURCE_RUN_CMD="$SCRIPT_DIR/td-resource-run"
 
 cls=$1
 dir=$2
@@ -20,6 +21,7 @@ term_cmds=("$@")
 printf -v cls_q '%q' "$cls"
 printf -v dir_q '%q' "$dir"
 printf -v ai_cmd_q '%q' "$ai_cmd"
+printf -v resource_run_q '%q' "$TD_RESOURCE_RUN_CMD"
 
 # Idempotent: if workspace already exists with our windows, just switch
 existing=$(hyprctl workspaces -j | jq -r --arg c "$cls" \
@@ -61,17 +63,17 @@ spawn_term() {
     local term_cmd_q
     printf -v term_cmd_q '%q' "$term_cmd"
 
-    hyprctl dispatch exec "env TD_WORKSPACE=$cls_q TD_TERM_CMD_STR=$term_cmd_q TD_WINDOW_STATE_CMD=$(printf '%q' "$TD_WINDOW_STATE_CMD") uwsm-app -- alacritty --working-directory $dir_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" term; if [ -n \"\$TD_TERM_CMD_STR\" ]; then sh -lc \"\$TD_TERM_CMD_STR\"; fi; exec \$SHELL'"
+    hyprctl dispatch exec "env TD_WORKSPACE=$cls_q TD_TERM_CMD_STR=$term_cmd_q TD_WINDOW_STATE_CMD=$(printf '%q' "$TD_WINDOW_STATE_CMD") uwsm-app -- $resource_run_q $cls_q -- alacritty --working-directory $dir_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" term; if [ -n \"\$TD_TERM_CMD_STR\" ]; then sh -lc \"\$TD_TERM_CMD_STR\"; fi; exec \$SHELL'"
 }
 
 # 1. editor (full screen)
-hyprctl dispatch exec "env TD_WORKSPACE=$cls_q TD_WINDOW_STATE_CMD=$(printf '%q' "$TD_WINDOW_STATE_CMD") uwsm-app -- alacritty --working-directory $dir_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" editor; \${EDITOR:-nvim} .; exec \$SHELL'"
+hyprctl dispatch exec "env TD_WORKSPACE=$cls_q TD_WINDOW_STATE_CMD=$(printf '%q' "$TD_WINDOW_STATE_CMD") uwsm-app -- $resource_run_q $cls_q -- alacritty --working-directory $dir_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" editor; \${EDITOR:-nvim} .; exec \$SHELL'"
 wait_for 1
 sleep 0.1
 
 # 2. preselect right → AI goes right of editor: [editor | AI]
 hyprctl dispatch layoutmsg "preselect r"
-hyprctl dispatch exec "env TD_WORKSPACE=$cls_q TD_AI_CMD_STR=$ai_cmd_q TD_WINDOW_STATE_CMD=$(printf '%q' "$TD_WINDOW_STATE_CMD") TD_AGENT_RUN_CMD=$(printf '%q' "$TD_AGENT_RUN_CMD") uwsm-app -- alacritty --working-directory $dir_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" ai; \"\$TD_AGENT_RUN_CMD\" --workspace \"\$TD_WORKSPACE\" --command \"\$TD_AI_CMD_STR\"; exec \$SHELL'"
+hyprctl dispatch exec "env TD_WORKSPACE=$cls_q TD_DIRECTORY=$dir_q TD_AI_CMD_STR=$ai_cmd_q TD_WINDOW_STATE_CMD=$(printf '%q' "$TD_WINDOW_STATE_CMD") TD_AGENT_COMMAND_CMD=$(printf '%q' "$TD_AGENT_COMMAND_CMD") uwsm-app -- $resource_run_q $cls_q -- alacritty --working-directory $dir_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" ai; \"\$TD_AGENT_COMMAND_CMD\" --workspace \"\$TD_WORKSPACE\" --directory \"\$TD_DIRECTORY\" --command \"\$TD_AI_CMD_STR\"; exec \$SHELL'"
 wait_for 2
 sleep 0.1
 

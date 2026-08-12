@@ -12,6 +12,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+TD_OPENCODE_SERVER_CMD="$SCRIPT_DIR/td-opencode-server"
+
 usage() {
     echo "Usage: td-cleanup [--dry-run] [-y|--yes]"
     echo ""
@@ -165,6 +168,7 @@ remove_one() {
         fi
         return 0
     fi
+    "$TD_OPENCODE_SERVER_CMD" stop "$path"
     if [[ "$kind" == worktree ]]; then
         git -C "$primary" worktree remove --force "$path"
     else

@@ -1,0 +1,61 @@
+#!/bin/bash
+# Run an agent command, attaching OpenCode clients to the checkout's shared server.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+
+workspace=${TD_WORKSPACE:-}
+directory=$PWD
+agent_command=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --workspace) workspace=$2; shift 2 ;;
+        --directory) directory=$2; shift 2 ;;
+        --command) agent_command=$2; shift 2 ;;
+        *) echo "td-agent-command: unknown option '$1'" >&2; exit 2 ;;
+    esac
+done
+
+[[ -n "$agent_command" ]] || { echo "td-agent-command: missing --command" >&2; exit 2; }
+
+command_prefix=${agent_command%% *}
+command_name=$(basename "$command_prefix")
+if [[ "$command_name" != "opencode" ]]; then
+    exec sh -lc "$agent_command"
+fi
+
+eval "set -- $agent_command"
+shift
+
+case "${1:-}" in
+    run)
+        shift
+        endpoint=$("$SCRIPT_DIR/td-opencode-server" ensure "$directory" "$workspace")
+        exec opencode run --attach "$endpoint" --dir "$directory" "$@"
+        ;;
+    attach|serve|web|acp|db|session|models|stats|export|import|github|mcp|agent|upgrade|uninstall)
+        exec sh -lc "$agent_command"
+        ;;
+esac
+
+endpoint=$("$SCRIPT_DIR/td-opencode-server" ensure "$directory" "$workspace")
+prompt=""
+args=()
+while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "--prompt" && $# -ge 2 ]]; then
+        prompt=$2
+        shift 2
+        continue
+    fi
+    args+=("$1")
+    shift
+done
+
+if [[ -n "$prompt" ]]; then
+    opencode run --attach "$endpoint" --dir "$directory" "$prompt"
+    args+=(--continue)
+fi
+
+exec opencode attach "$endpoint" --dir "$directory" "${args[@]}"

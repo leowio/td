@@ -10,6 +10,9 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+TD_RESOURCE_RUN_CMD="$SCRIPT_DIR/td-resource-run"
+
 # Get current dir name, sanitized for workspace naming
 get_project_name() {
     local dir="$1"
@@ -53,6 +56,8 @@ td_open() {
     
     local project
     project=$(get_project_name "$dir")
+
+    "$TD_RESOURCE_RUN_CMD" "td-$project" --configure
 
     local layout_cmd
     layout_cmd=$(quote_args td-layout "td-$project" "$dir" "$ai_cmd" "${term_cmds[@]}")
@@ -167,6 +172,10 @@ usage() {
     echo ""
     echo "Environment:"
     echo "  TD_AI_CMD                 Default AI command when no ai_args are passed"
+    echo "  TD_MEMORY_HIGH            Workspace memory pressure threshold (for example 20G)"
+    echo "  TD_MEMORY_MAX             Workspace hard memory limit (for example 28G)"
+    echo "  TD_MEMORY_SWAP_MAX        Workspace swap limit (for example 4G)"
+    echo "  TD_CPU_QUOTA              Workspace CPU quota (for example 400% for four cores)"
 }
 
 # Main entry point

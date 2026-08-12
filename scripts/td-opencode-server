@@ -1,0 +1,175 @@
+#!/bin/bash
+# Manage one shared OpenCode server for a td checkout.
+
+set -euo pipefail
+
+STATE_ROOT="${TD_OPENCODE_STATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/td-opencode-server}"
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+
+usage() {
+    echo "Usage: td-opencode-server ensure <directory> <workspace>"
+    echo "       td-opencode-server stop <directory>"
+}
+
+canonical_directory() {
+    realpath -e "$1"
+}
+
+state_for() {
+    local directory=$1
+    local key
+    key=$(printf '%s' "$directory" | sha256sum | awk '{ print $1 }')
+    printf '%s\t%s\t%s\n' "$STATE_ROOT/$key" "td-opencode-${key:0:16}.service" "td-opencode-watch-${key:0:16}.service"
+}
+
+healthy() {
+    local port=$1 unit=$2
+    systemctl --user is-active --quiet "$unit" 2>/dev/null &&
+        curl --silent --fail --max-time 1 "http://127.0.0.1:$port/global/health" >/dev/null 2>&1
+}
+
+start_watcher() {
+    local watch_unit=$1 directory=$2 workspace=$3
+    systemctl --user stop "$watch_unit" >/dev/null 2>&1 || true
+    systemctl --user reset-failed "$watch_unit" >/dev/null 2>&1 || true
+    systemd-run --user --quiet --collect --unit="$watch_unit" -- \
+        "$SCRIPT_PATH" watch "$directory" "$workspace"
+}
+
+read_port() {
+    local state_dir=$1
+    port=""
+    [[ -r "$state_dir/port" ]] && read -r port < "$state_dir/port"
+    return 0
+}
+
+stop_server_locked() {
+    local state_dir=$1 unit=$2
+    systemctl --user stop "$unit" >/dev/null 2>&1 || true
+    rm -rf "$state_dir"
+}
+
+stop_directory() {
+    local directory state_dir unit watch_unit
+    directory=$(canonical_directory "$1")
+    IFS=$'\t' read -r state_dir unit watch_unit < <(state_for "$directory")
+
+    mkdir -p "$STATE_ROOT"
+    exec 9>"$STATE_ROOT/lock"
+    flock 9
+    systemctl --user stop "$watch_unit" >/dev/null 2>&1 || true
+    stop_server_locked "$state_dir" "$unit"
+}
+
+watch_workspace() {
+    local directory=$1 workspace=$2
+    local seen=0 missing=0 attempts=0 state_dir unit watch_unit
+    IFS=$'\t' read -r state_dir unit watch_unit < <(state_for "$directory")
+
+    while sleep 2; do
+        ((attempts += 1))
+        if hyprctl workspaces -j 2>/dev/null | jq -e --arg workspace "$workspace" '.[] | select(.name == $workspace)' >/dev/null; then
+            seen=1
+            missing=0
+            continue
+        fi
+
+        ((missing += 1))
+        if ((seen == 1 && missing >= 2)) || ((seen == 0 && attempts >= 30)); then
+            mkdir -p "$STATE_ROOT"
+            exec 9>"$STATE_ROOT/lock"
+            flock 9
+            stop_server_locked "$state_dir" "$unit"
+            exit 0
+        fi
+    done
+}
+
+ensure_server() {
+    local directory workspace state_dir unit watch_unit slice project port candidate
+    directory=$(canonical_directory "$1")
+    workspace=$2
+    IFS=$'\t' read -r state_dir unit watch_unit < <(state_for "$directory")
+
+    for command in systemctl systemd-run systemd-escape curl flock ss opencode; do
+        command -v "$command" >/dev/null 2>&1 || {
+            echo "td-opencode-server: '$command' is required" >&2
+            exit 1
+        }
+    done
+
+    mkdir -p "$STATE_ROOT"
+    exec 9>"$STATE_ROOT/lock"
+    flock 9
+
+    read_port "$state_dir"
+    if [[ -n "$port" ]] && healthy "$port" "$unit"; then
+        if ! systemctl --user is-active --quiet "$watch_unit" 2>/dev/null; then
+            start_watcher "$watch_unit" "$directory" "$workspace"
+        fi
+        printf 'http://127.0.0.1:%s\n' "$port"
+        return 0
+    fi
+    systemctl --user stop "$watch_unit" >/dev/null 2>&1 || true
+    stop_server_locked "$state_dir" "$unit"
+
+    port=""
+    for candidate in $(seq "${TD_OPENCODE_PORT_MIN:-4100}" "${TD_OPENCODE_PORT_MAX:-4999}"); do
+        if ! ss -H -ltn "sport = :$candidate" | grep -q .; then
+            port=$candidate
+            break
+        fi
+    done
+    if [[ -z "$port" ]]; then
+        echo "td-opencode-server: no free port in the configured range" >&2
+        exit 1
+    fi
+
+    project=${workspace#td-}
+    slice=$(systemd-escape --path --suffix=slice "/td/$project")
+    systemctl --user reset-failed "$unit" >/dev/null 2>&1 || true
+    systemd-run --user --quiet --collect --unit="$unit" --slice="$slice" \
+        -p "WorkingDirectory=$directory" \
+        -p "MemoryMax=${TD_OPENCODE_MEMORY_MAX:-12G}" \
+        -p "MemorySwapMax=${TD_OPENCODE_MEMORY_SWAP_MAX:-1G}" \
+        -p "TasksMax=${TD_OPENCODE_TASKS_MAX:-400}" \
+        -- opencode serve --port "$port" --hostname 127.0.0.1
+
+    for _ in $(seq 1 100); do
+        if healthy "$port" "$unit"; then
+            mkdir -p "$state_dir"
+            printf '%s\n' "$directory" > "$state_dir/directory"
+            printf '%s\n' "$workspace" > "$state_dir/workspace"
+            printf '%s\n' "$port" > "$state_dir/port"
+
+            start_watcher "$watch_unit" "$directory" "$workspace"
+            printf 'http://127.0.0.1:%s\n' "$port"
+            return 0
+        fi
+        systemctl --user is-active --quiet "$unit" 2>/dev/null || break
+        sleep 0.1
+    done
+
+    stop_server_locked "$state_dir" "$unit"
+    echo "td-opencode-server: server failed to start; inspect journalctl --user -u $unit" >&2
+    exit 1
+}
+
+case "${1:-}" in
+    ensure)
+        [[ $# -eq 3 ]] || { usage >&2; exit 2; }
+        ensure_server "$2" "$3"
+        ;;
+    stop)
+        [[ $# -eq 2 ]] || { usage >&2; exit 2; }
+        stop_directory "$2"
+        ;;
+    watch)
+        [[ $# -eq 3 ]] || exit 2
+        watch_workspace "$2" "$3"
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac

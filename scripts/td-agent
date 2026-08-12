@@ -1,12 +1,13 @@
 #!/bin/bash
-# td-agent - spawn a wrapped AI terminal in the current td workspace
+# td-agent - spawn an AI terminal in the current td workspace
 # Usage: td-agent [ai_args...]
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 TD_WINDOW_STATE_CMD="$SCRIPT_DIR/td-window-state"
-TD_AGENT_RUN_CMD="$SCRIPT_DIR/td-agent-run.ts"
+TD_AGENT_COMMAND_CMD="$SCRIPT_DIR/td-agent-command"
+TD_RESOURCE_RUN_CMD="$SCRIPT_DIR/td-resource-run"
 
 ws=$(hyprctl activeworkspace -j | jq -r '.name')
 
@@ -25,5 +26,6 @@ cwd=${cwd:-$PWD}
 printf -v ws_q '%q' "$ws"
 printf -v cwd_q '%q' "$cwd"
 printf -v ai_cmd_q '%q' "$ai_cmd"
+printf -v resource_run_q '%q' "$TD_RESOURCE_RUN_CMD"
 
-exec hyprctl dispatch exec "env TD_WORKSPACE=$ws_q TD_AI_CMD_STR=$ai_cmd_q TD_WINDOW_STATE_CMD=$(printf '%q' "$TD_WINDOW_STATE_CMD") TD_AGENT_RUN_CMD=$(printf '%q' "$TD_AGENT_RUN_CMD") uwsm-app -- alacritty --working-directory $cwd_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" ai; \"\$TD_AGENT_RUN_CMD\" --workspace \"\$TD_WORKSPACE\" --command \"\$TD_AI_CMD_STR\"; exec \$SHELL'"
+exec hyprctl dispatch exec "env TD_WORKSPACE=$ws_q TD_DIRECTORY=$cwd_q TD_AI_CMD_STR=$ai_cmd_q TD_WINDOW_STATE_CMD=$(printf '%q' "$TD_WINDOW_STATE_CMD") TD_AGENT_COMMAND_CMD=$(printf '%q' "$TD_AGENT_COMMAND_CMD") uwsm-app -- $resource_run_q $ws_q -- alacritty --working-directory $cwd_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" ai; \"\$TD_AGENT_COMMAND_CMD\" --workspace \"\$TD_WORKSPACE\" --directory \"\$TD_DIRECTORY\" --command \"\$TD_AI_CMD_STR\"; exec \$SHELL'"

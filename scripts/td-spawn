@@ -24,7 +24,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 TD_WINDOW_STATE_CMD="$SCRIPT_DIR/td-window-state"
-TD_AGENT_RUN_CMD="$SCRIPT_DIR/td-agent-run.ts"
+TD_AGENT_COMMAND_CMD="$SCRIPT_DIR/td-agent-command"
+TD_RESOURCE_RUN_CMD="$SCRIPT_DIR/td-resource-run"
 
 # Defaults
 message=""
@@ -137,9 +138,10 @@ printf -v ws_q '%q' "$workspace"
 printf -v dir_q '%q' "$directory"
 printf -v agent_cmd_q '%q' "$agent_cmd"
 printf -v title_q '%q' "$title"
+printf -v resource_run_q '%q' "$TD_RESOURCE_RUN_CMD"
 
 # Spawn the AI terminal via hyprctl
-spawn_cmd="env TD_WORKSPACE=$ws_q TD_AI_CMD_STR=$agent_cmd_q TD_WINDOW_STATE_CMD=$(printf '%q' "$TD_WINDOW_STATE_CMD") TD_AGENT_RUN_CMD=$(printf '%q' "$TD_AGENT_RUN_CMD") uwsm-app -- alacritty --working-directory $dir_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" ai; \"\$TD_AGENT_RUN_CMD\" --workspace \"\$TD_WORKSPACE\" --command \"\$TD_AI_CMD_STR\"; exec \$SHELL'"
+spawn_cmd="env TD_WORKSPACE=$ws_q TD_DIRECTORY=$dir_q TD_AI_CMD_STR=$agent_cmd_q TD_WINDOW_STATE_CMD=$(printf '%q' "$TD_WINDOW_STATE_CMD") TD_AGENT_COMMAND_CMD=$(printf '%q' "$TD_AGENT_COMMAND_CMD") uwsm-app -- $resource_run_q $ws_q -- alacritty --working-directory $dir_q -e sh -lc '\"\$TD_WINDOW_STATE_CMD\" register \"\$TD_WORKSPACE\" ai; \"\$TD_AGENT_COMMAND_CMD\" --workspace \"\$TD_WORKSPACE\" --directory \"\$TD_DIRECTORY\" --command \"\$TD_AI_CMD_STR\"; exec \$SHELL'"
 
 hyprctl dispatch exec "$spawn_cmd"
 

@@ -1,0 +1,49 @@
+#!/bin/bash
+# Configure a workspace slice or run a process inside it when it exists.
+
+set -euo pipefail
+
+workspace=${1:-}
+action=${2:-}
+
+if [[ -z "$workspace" || -z "$action" ]]; then
+    echo "Usage: td-resource-run <workspace> --configure|-- <command...>" >&2
+    exit 2
+fi
+
+properties=()
+if [[ "$action" == "--configure" ]]; then
+    [[ -n "${TD_MEMORY_HIGH:-}" ]] && properties+=("MemoryHigh=$TD_MEMORY_HIGH")
+    [[ -n "${TD_MEMORY_MAX:-}" ]] && properties+=("MemoryMax=$TD_MEMORY_MAX")
+    [[ -n "${TD_MEMORY_SWAP_MAX:-}" ]] && properties+=("MemorySwapMax=$TD_MEMORY_SWAP_MAX")
+    [[ -n "${TD_CPU_QUOTA:-}" ]] && properties+=("CPUQuota=$TD_CPU_QUOTA")
+    ((${#properties[@]} > 0)) || exit 0
+elif [[ "$action" != "--" || $# -lt 3 ]]; then
+    echo "Usage: td-resource-run <workspace> --configure|-- <command...>" >&2
+    exit 2
+fi
+
+if ! command -v systemctl >/dev/null 2>&1 || ! command -v systemd-run >/dev/null 2>&1 || ! command -v systemd-escape >/dev/null 2>&1; then
+    if [[ "$action" == "--configure" ]]; then
+        echo "td-resource-run: systemd user tools are required for resource limits" >&2
+        exit 1
+    fi
+    shift 2
+    exec "$@"
+fi
+
+project=${workspace#td-}
+slice=$(systemd-escape --path --suffix=slice "/td/$project")
+
+if [[ "$action" == "--configure" ]]; then
+    systemctl --user start "$slice"
+    systemctl --user set-property --runtime "$slice" "${properties[@]}"
+    exit 0
+fi
+
+shift 2
+if systemctl --user is-active --quiet "$slice"; then
+    exec systemd-run --user --scope --quiet --collect --slice="$slice" -- "$@"
+fi
+
+exec "$@"

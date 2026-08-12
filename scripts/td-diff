@@ -6,6 +6,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 TD_WINDOW_STATE_CMD="$SCRIPT_DIR/td-window-state"
 TD_DIFF_RUN_CMD="$SCRIPT_DIR/../diff.ts"
+TD_RESOURCE_RUN_CMD="$SCRIPT_DIR/td-resource-run"
 
 if [[ "${TD_DIFF_IN_TERMINAL:-}" == "1" ]]; then
     exec "$TD_DIFF_RUN_CMD" "$@"
@@ -28,7 +29,7 @@ fi
 
 if [[ "$ws" == td-* ]]; then
     exec env TD_WORKSPACE="$ws" TD_WINDOW_STATE_CMD="$TD_WINDOW_STATE_CMD" \
-        uwsm-app -- alacritty --working-directory "$cwd" \
+        uwsm-app -- "$TD_RESOURCE_RUN_CMD" "$ws" -- alacritty --working-directory "$cwd" \
         -e env TD_DIFF_IN_TERMINAL=1 TD_WORKSPACE="$ws" TD_WINDOW_STATE_CMD="$TD_WINDOW_STATE_CMD" \
         sh -lc '"$TD_WINDOW_STATE_CMD" register "$TD_WORKSPACE" term; "$0" "$@"; code=$?; printf "\ntd-diff exited with %s. Press enter to close..." "$code"; read _; exit "$code"' "$TD_DIFF_RUN_CMD" "$@"
 fi

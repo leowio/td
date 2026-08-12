@@ -113,13 +113,25 @@ function batCommand() {
   return resolvedBatCommand ?? undefined;
 }
 
+const MAX_FULL_FILE_BYTES = 256 * 1024;
+
+function fullFileHeader(status: "ADDED" | "DELETED", path: string) {
+  const color = status === "ADDED" ? 92 : 91;
+  return `\x1b[${color}m${status}\x1b[0m  ${path}`;
+}
+
+function fullFileTooLarge(status: "ADDED" | "DELETED", path: string, size: number) {
+  return `${fullFileHeader(status, path)}\n\nFile is too large to display (${(size / 1024).toFixed(0)} KiB; limit ${MAX_FULL_FILE_BYTES / 1024} KiB).`;
+}
+
 function fullFileDiff(status: "ADDED" | "DELETED", path: string, content: string) {
+  const size = Buffer.byteLength(content);
+  if (size > MAX_FULL_FILE_BYTES) return fullFileTooLarge(status, path, size);
   const bat = batCommand();
   const highlighted = bat
     ? tryRun([bat, "--color=always", "--style=plain", "--paging=never", "--theme=ansi", "--file-name", path, "-"], content) || content
     : content;
-  const color = status === "ADDED" ? 92 : 91;
-  return `\x1b[${color}m${status}\x1b[0m  ${path}\n\n${highlighted}`;
+  return `${fullFileHeader(status, path)}\n\n${highlighted}`;
 }
 
 function semCommand() {
@@ -187,6 +199,8 @@ function semanticWorkingDiff(compareRef: string, change: Change) {
 export function changeDiff(compareRef: string, change: Change) {
   if (change.status[0] === "A") {
     try {
+      const size = statSync(change.path).size;
+      if (size > MAX_FULL_FILE_BYTES) return fullFileTooLarge("ADDED", change.path, size);
       return fullFileDiff("ADDED", change.path, readFileSync(change.path, "utf8"));
     } catch {
       return `Unable to read added file ${change.path}.`;

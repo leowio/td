@@ -17,6 +17,15 @@ type Pane = "commits" | "files" | "diff";
 type InputMode = "normal" | "query";
 
 const MAX_DISPLAY_DIFF_BYTES = 2 * 1024 * 1024;
+const FILE_STATUS_QUERIES = {
+  a: { query: "^A ", label: "added" },
+  c: { query: "^C", label: "copied" },
+  d: { query: "^D ", label: "deleted" },
+  m: { query: "^M ", label: "modified" },
+  r: { query: "^R", label: "renamed" },
+  t: { query: "^T ", label: "type-changed" },
+  u: { query: "^U ", label: "unmerged" },
+} as const;
 
 type DiffRequest = {
   key: string;
@@ -285,8 +294,8 @@ export async function runDiffTui({ compareRef, label }: DiffTuiOptions) {
     filesText.scrollY = Math.max(0, fileIndex - Math.max(1, filesText.height - 2));
     diffText.scrollY = diffScroll;
     footer.content = mode === "query"
-      ? `QUERY  type to filter  Enter apply  Esc cancel  Tab select  Ctrl-C copy text/clear\n/${activeQuery}`
-      : `NORMAL  c/f/d panes  h/l focus  j/k move  / query  Tab select  Ctrl-C copy text/clear  q quit\n${status || "Enter toggles folders  Ctrl-Y copies selected paths"}`;
+      ? `QUERY  type to filter  Alt-A/M/D/R status  Alt-X clear  Enter apply  Esc cancel\n/${activeQuery}`
+      : `NORMAL  c/f/d panes  h/l focus  j/k move  / query  Tab select  Ctrl-C copy text/clear  q quit\n${status || "Alt-A/M/D/R filters status  Ctrl-Y copies selected paths"}`;
     if (paneVisible.diff) scheduleDiff(diffRequestFor(fileRows, changes));
     renderer.root.requestRender();
   }
@@ -367,7 +376,6 @@ export async function runDiffTui({ compareRef, label }: DiffTuiOptions) {
     }
     queryTarget = focus;
     queryBeforeEdit = queries[queryTarget];
-    queries[queryTarget] = "";
     mode = "query";
     if (queryTarget === "commits") commitIndex = 0;
     else fileIndex = 0;
@@ -394,6 +402,16 @@ export async function runDiffTui({ compareRef, label }: DiffTuiOptions) {
     else if (!key.ctrl && !key.meta && key.sequence.length === 1) queries[queryTarget] += key.sequence;
     if (queryTarget === "commits") commitIndex = 0;
     else fileIndex = 0;
+  }
+
+  function setFileQuery(query: string, message: string) {
+    queryBeforeEdit = queries.files;
+    queries.files = query;
+    queryTarget = "files";
+    mode = "query";
+    if (paneVisible.files) focus = "files";
+    fileIndex = 0;
+    status = message;
   }
 
   function mouseScroll(pane: "commits" | "files", event: MouseEvent) {
@@ -440,6 +458,19 @@ export async function runDiffTui({ compareRef, label }: DiffTuiOptions) {
       }
       render();
       return;
+    }
+    if (key.meta && key.name === "x") {
+      setFileQuery("", "File filter cleared.");
+      render();
+      return;
+    }
+    if (key.meta) {
+      const selector = FILE_STATUS_QUERIES[key.name as keyof typeof FILE_STATUS_QUERIES];
+      if (selector) {
+        setFileQuery(selector.query, `Filtering ${selector.label} files.`);
+        render();
+        return;
+      }
     }
     if (key.name === "tab") {
       toggleSelection();

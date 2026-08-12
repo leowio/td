@@ -31,6 +31,8 @@ Normal mode:
   mouse wheel           Move the pointer in the commit or file pane
   left click            Focus the commit or file pane and select a row
   /                     Start an fzf query for the focused list
+  alt-a/m/d/r/c/t/u     Filter files by change status and edit the query
+  alt-x                 Clear the file query
   tab / shift-tab       Toggle selection and move
   enter                 Collapse or expand a folder
   ctrl-c                Copy selected diff text, otherwise clear selection
@@ -38,6 +40,9 @@ Normal mode:
   q                     Exit
 
 Query mode:
+  ^A pattern            Filter by status and path pattern (^D, ^M, etc.)
+  alt-a/m/d/r/c/t/u     Replace the query with a change-status selector
+  alt-x                 Clear the file query
   enter                 Apply query
   escape                Cancel query and restore the previous query
   tab / shift-tab       Toggle selection and move
